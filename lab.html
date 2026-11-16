@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Scene lab</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      canvas#c { display: block; width: 100vw; height: 100vh; }
+      #hud {
+        position: fixed; left: 10px; top: 8px; z-index: 2;
+        font: 12px/1.45 ui-monospace, Menlo, monospace; color: #cfd6dc;
+        background: rgba(0, 0, 0, 0.55); padding: 6px 9px; border-radius: 4px;
+        white-space: pre; pointer-events: none;
+      }
+      #hud.hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+    <div id="hud"></div>
+    <script type="module" src="/src/lab/main.js"></script>
+  </body>
+</html>
