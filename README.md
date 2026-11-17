@@ -3,7 +3,9 @@
 A browser app that turns a laptop screen into a window. The webcam follows
 your open eye, and every frame is drawn from exactly where that eye is, so the
 scene behind the screen holds still in space while your head moves. Lean to
-look around things; duck to see what is above.
+look around things; duck to see what is above. To move around inside a scene,
+carry the window with the arrow keys, a drag or a two-finger swipe, or let the
+tour (T) take you through it.
 
 ## Running it
 
@@ -47,13 +49,69 @@ to set eye spacing, camera height and the camera's field of view.
 | --- | --- |
 | 1, 2 | Soundstage, Box |
 | [ and ] | Previous and next scene |
+| ↑ and ↓ | Move forward and back |
+| ← and → | Step left and right |
+| Shift + ↑ and ↓ | Rise and sink |
+| Shift + ← and → | Turn left and right |
+| + and - | Shrink into the set, grow back |
+| N, Shift + N | Next place, the place before |
+| T | Guided tour, start and stop |
+| H or Home | Back to the first place |
 | F | Full screen on and off |
 | V | View direction: Look around or True window |
 | R | Re-centre the view on where you sit now |
 | C | Steady check |
 | D | Tracking details (and Record tracking log) |
 | S | Settings |
-| Esc | Close the open panel |
+| Esc | Close the open panel, or stop the tour |
+
+| Trackpad or mouse | What it does |
+| --- | --- |
+| Drag | Turn and tilt; the scene follows the pointer |
+| Two-finger swipe, scroll wheel | Up and down move forward and back; sideways turns |
+| Pinch | Move forward and back |
+
+### Moving around
+
+Each scene has named places to visit. Their names sit in a small strip above
+the controls at the bottom; click one, or press N, and the window glides there,
+slowing out and in, turning the short way round. The name shows at the top of
+the screen when you arrive. T starts a tour that glides through the places,
+stops at each for four seconds and goes round until you press T or Esc, or
+move. Your head still works the whole time: lean and turn to look around
+wherever the window is.
+
+Moving keeps to the parts of the set that are built. + takes you smaller,
+into the set (everything looks bigger), down to about a twentieth of your
+size (life size and a little smaller in the Soundstage's 1:16 set, about a
+seventeenth in the Box); - grows you back. Speeds are the same at every size, and a held arrow key
+speeds up after a moment. All motion goes through the same kind of soft,
+critically damped spring as head tracking, so it never swings past where it
+was sent.
+
+Some places hold head tracking in. Far away through a small window, moving
+your head mostly pans the picture, like a long lens, so at those places Look
+around moves the view less for each centimetre you move (at most the place's
+own strength, with no extra up and down). Those places also stop the view
+backing too far from the glass, in every view direction and in phone lens
+mode, so leaning back there does not put the view inside a wall behind you;
+True window and phone lens mode otherwise stay exact. In the Soundstage your
+eye also stays inside the stage building wherever you move. Gliding to or
+from such a place eases between the two.
+
+Moving does not wake the controls: the arrow keys, + and -, scrolling,
+pinching and dragging the scene leave them faded while you look around.
+Moving the pointer brings them back.
+
+With Use mouse instead, moving the pointer stands in for leaning your head,
+so to turn, hold the button down and drag: the lean holds still until you
+let go.
+
+A two-finger swipe and a mouse wheel arrive in the browser as the same
+event, so both mean the same: up and down move you, sideways turns. With
+macOS's natural scrolling (the default), fingers or wheel away from you move
+you forward. A pinch never zooms the page, which would put the scene out of
+line with the display.
 
 Settings, Motion:
 
@@ -189,12 +247,27 @@ scene contract), `docs/CORE_NOTES.md` (tracking and measurements),
   rain rig to a painted translight of the city, which gives itself away from
   the side, and the water truck's hose; above, the grid, catwalks, chain
   motors and the roof trusses; below, the dolly track, cables and spike tape.
+  Its places, at life size apart from the shot: on the sidewalk at the
+  diner's window; inside the diner, down its whole length from the far end
+  (the end wall is a wild wall and flies out); behind the A-camera on its
+  dolly, its monitor showing the shot live; the painted backdrop where the
+  street runs into it; backstage in the gap behind the diner, down to the
+  stage door; video village, its monitors live; up on the catwalk.
 - **Box.** A room exactly the size of the window and 50 cm deep, lit by a low
   sun through a paper lattice, with a dusk view through a round window at the
   back and a small bell hanging in front of the glass. Swing wide and the
   shoji beside the lattice stands slid open onto an engawa and a small garden
   at dusk: moss and stepping stones, a stone lantern with its candle lit, a
-  maple in red, a garden wall and two ridges under the evening sky.
+  maple in red, a garden wall and two ridges under the evening sky. The room
+  is one room of a whole house: plaster and cedar walls, a gabled tile roof,
+  eave rafters with a wind bell, a crawl space on stone footings; beside it a
+  next room with a tokonoma, a hanging scroll, a chest and a brazier; outside,
+  the garden on a stone terrace (a stone basin with a bamboo spout, raked
+  gravel, azaleas, a hedge and a bamboo grove) above a valley of forest and
+  layered ridges under a dusk sky. Its places: the room at rest; the next
+  room, from its corner to the tokonoma; by the round window; out on the
+  engawa; under the eave, looking up at the wind bell against the dusk; and
+  the garden, from beyond the maple looking back at the house.
 
 All geometry and textures in both scenes are made in code; there are no
 third-party assets.
@@ -240,7 +313,15 @@ third-party assets.
   slowly follows.
 - Full screen is the intended mode. In a window, the app assumes any side
   panel is on the right.
-- Switching scenes takes two to three seconds, through black.
+- Switching scenes takes two to three seconds, through black. A new scene
+  starts at its first place.
+- Moving around has no collisions: inside the allowed space the window can
+  pass through things. In the Soundstage your eye is kept inside the stage
+  building, so leaning never takes the view through its outer walls; the Box
+  has no such limit when you move away from its places. On a Mac laptop the
+  Home key is fn + left arrow (H
+  does the same). The trackpad and drag speeds are set by hand, not yet
+  tried on a real trackpad.
 - A fanless laptop can get warm in long sessions; the app steps its
   resolution down rather than drop frames.
 

@@ -13,18 +13,21 @@
 //   auto=0                     no animation loop (tools drive frames)
 //   view=window|viewer         window image, or the viewer's view of the laptop
 //   dpr=                       override device pixel ratio
+//   station=id                 start at one of the scene's nav stations (the rig;
+//                              docs/ARCHITECTURE.md "Moving the window")
 //
 // Keys: arrows/WASD move the eye 1 cm (shift 5 cm), Q/E or +/- move in z,
 // 1-7 presets, M toggles mouse-follow, P cycles head paths, V toggles the
 // viewer view, L toggles quality, [ ] switch scene, H hides the overlay.
 
 import * as THREE from 'three';
-import { applyWindowCamera } from '../core/projection.js';
+import { applyRigCamera, poseFrom, keepEyeInRoom, IDENTITY_POSE } from '../core/rig.js';
+import { withNearAtLeast, makeDepthCamera } from '../scenes/_lib/depthcam.js';
 import { PRESETS, PATHS, SHEET_ORDER } from './paths.js';
 import { ViewerView } from './viewer.js';
 import { windowCheck } from './check.js';
 import { SyncTimer } from './gpu-timer.js';
-import { CLASSES, classMaterial } from './classes.js';
+import { CLASSES, classMaterial, nameIn } from './classes.js';
 
 const modules = import.meta.glob('../scenes/*/index.js');
 const sceneIds = Object.keys(modules)
@@ -49,7 +52,15 @@ const state = {
   H: params.get('h') ? cm(params.get('h')) : 0.205109,
   time: 0,
   frameMs: [],
+  // the rig: where the window is in the scene (identity: today's view)
+  rig: { ...IDENTITY_POSE },
+  station: params.get('station') || null,
 };
+// what scene.update gets as its fourth argument (docs/ARCHITECTURE.md)
+const view = { eyeWorld: new THREE.Vector3(), rig: { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), scale: 1 } };
+const maskCam = makeDepthCamera();
+// the eye kept inside the scene's room, as the app keeps it (core/rig.js)
+const placeCamera = (cam, eye, s) => applyRigCamera(cam, keepEyeInRoom(eye, state.rig, handle?.nav?.room), s.width, s.height, state.rig, { near: 0.01, far: 60 }, view);
 
 const canvas = document.getElementById('c');
 const hud = document.getElementById('hud');
@@ -110,8 +121,13 @@ async function loadScene(id, quality) {
     flags: Object.fromEntries(params),
   });
   handle.title = mod.title;
+  handle.nav = mod.nav ?? null;
   state.sceneId = id;
   state.quality = quality;
+  // a station named in the URL (or kept from before) if this scene has it
+  const st = handle.nav?.stations.find((s) => s.id === state.station);
+  state.rig = st ? poseFrom(st.pose) : { ...IDENTITY_POSE };
+  if (!st) state.station = null;
 }
 
 function renderWindowImage(cam) {
@@ -130,8 +146,8 @@ function frame(now = performance.now(), { dt: forcedDt } = {}) {
     state.eye.set(...p.at(t));
   }
   const s = windowSize();
-  applyWindowCamera(camera, state.eye, s.width, s.height, { near: 0.01, far: 60 });
-  handle.update?.(dt, state.time, state.eye);
+  placeCamera(camera, state.eye, s);
+  handle.update?.(dt, state.time, state.eye, view);
   renderer.info.reset();
   const t0 = performance.now();
   if (state.view === 'viewer') {
@@ -152,9 +168,11 @@ function drawHud() {
   const e = state.eye;
   const ms = state.frameMs.reduce((a, b) => a + b, 0) / Math.max(state.frameMs.length, 1);
   const info = renderer.info.render;
+  const r = state.rig;
   hud.textContent =
     `${handle?.title ?? state.sceneId}  [${state.quality}]  view: ${state.view}\n` +
     `eye  x ${(e.x * 100).toFixed(1)}  y ${(e.y * 100).toFixed(1)}  z ${(e.z * 100).toFixed(1)} cm\n` +
+    `rig  ${state.station ?? '-'}  (${[r.x, r.y, r.z].map((v) => v.toFixed(3)).join(', ')})  yaw ${r.yaw.toFixed(1)}  pitch ${r.pitch.toFixed(1)}  scale ${r.scale.toFixed(4)}   N: next station\n` +
     `cpu submit ${ms.toFixed(2)} ms   draws ${info.calls}   tris ${(info.triangles / 1000).toFixed(0)}k\n` +
     `path ${state.pathName ?? '-'}   mouse ${state.mouse ? 'on' : 'off'}`;
 }
@@ -191,7 +209,13 @@ window.addEventListener('keydown', async (ev) => {
   else if (k === 'q' || k === '-') e.z = Math.min(1.6, e.z + step);
   else if (k === 'e' || k === '=' || k === '+') e.z = Math.max(0.2, e.z - step);
   else if (k >= '1' && k <= '7') { e.set(...PRESETS[SHEET_ORDER[Number(k) - 1]]); state.pathName = null; }
-  else if (k === 'm') state.mouse = !state.mouse;
+  else if (k === 'n' && handle?.nav) {
+    const list = handle.nav.stations;
+    const i = list.findIndex((s) => s.id === state.station);
+    const st = list[(i + 1) % list.length];
+    state.station = st.id;
+    state.rig = poseFrom(st.pose);
+  } else if (k === 'm') state.mouse = !state.mouse;
   else if (k === 'h') state.hud = !state.hud;
   else if (k === 'v') state.view = state.view === 'window' ? 'viewer' : 'window';
   else if (k === 'p') {
@@ -235,6 +259,128 @@ window.__lab = {
     gpuSync();
   },
   setEye(x, y, z) { state.eye.set(x, y, z); state.pathName = null; },
+  // ---- the rig (docs/ARCHITECTURE.md, "Moving the window")
+  get nav() { return handle?.nav ?? null; },
+  get rig() { return { ...state.rig, station: state.station }; },
+  /** Put the window at one of the scene's stations (null: the identity rig). */
+  setStation(id) {
+    const st = id ? handle?.nav?.stations.find((s) => s.id === id) : null;
+    if (id && !st) throw new Error(`no station "${id}" in ${state.sceneId}`);
+    state.station = st ? st.id : null;
+    state.rig = st ? poseFrom(st.pose) : { ...IDENTITY_POSE };
+  },
+  /** Any rig pose: { position:[x,y,z] | x,y,z, yaw, pitch, scale }. */
+  setRig(p) {
+    state.station = null;
+    state.rig = p.position ? poseFrom(p) : { ...IDENTITY_POSE, ...p };
+  },
+  /** The view object the scene's update got last frame (copies). */
+  get view() { return { eyeWorld: view.eyeWorld.toArray(), rig: { position: view.rig.position.toArray(), quaternion: view.rig.quaternion.toArray(), scale: view.rig.scale } }; },
+  /**
+   * What the current eye sees that it should not: the background (void) and
+   * back faces of one-sided surfaces (holes, inside-out parts). Opaque meshes
+   * only (glass, glow cards, rain and other overlays are skipped). Draws flat
+   * colours, reads the canvas back and counts pixels; returns fractions and a
+   * PNG with the offending pixels marked (magenta: void, red: back faces).
+   */
+  voidMask({ image = false } = {}) {
+    const scene = handle.scene;
+    const saved = [];
+    const hidden = [];
+    const made = new Map();
+    // pass 1 (void): each surface keeps its own side, as the frame draws it;
+    // pass 2 (back faces): everything two-sided, the backs of one-sided
+    // surfaces red: holes and inside-out parts the frame would see through
+    const mat = (side, pass) => {
+      const key = `${side}-${pass}`;
+      if (!made.has(key)) {
+        made.set(key, new THREE.ShaderMaterial({
+          uniforms: { oneSided: { value: side === THREE.FrontSide ? 1 : 0 } },
+          vertexShader: 'void main() { vec4 p = vec4(position, 1.0);\n#ifdef USE_INSTANCING\np = instanceMatrix * p;\n#endif\ngl_Position = projectionMatrix * viewMatrix * modelMatrix * p; }',
+          fragmentShader: 'uniform float oneSided; void main() { gl_FragColor = (gl_FrontFacing || oneSided < 0.5) ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(1.0, 0.0, 0.0, 1.0); }',
+          side: pass === 1 ? side : THREE.DoubleSide,
+        }));
+      }
+      return made.get(key);
+    };
+    scene.traverse((o) => {
+      if (!(o.isMesh || o.isPoints || o.isLine) || !o.visible) return;
+      const m = o.material;
+      const overlay = !m || Array.isArray(m) || m.transparent || m.blending === THREE.AdditiveBlending || m.depthWrite === false || o.userData.checkExclude || o.isPoints || o.isLine;
+      if (overlay) { o.visible = false; hidden.push(o); return; }
+      saved.push([o, m]);
+    });
+    const bg = scene.background;
+    scene.background = new THREE.Color(1, 0, 1);
+    const s = windowSize();
+    placeCamera(camera, state.eye, s);
+    // the near plane the scene's own render uses (soundstage: 5 cm real)
+    const cam = handle.debug?.nearMin ? withNearAtLeast(camera, handle.debug.nearMin, maskCam) : camera;
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    const count = (pass) => {
+      for (const [o, m] of saved) o.material = mat(m.side, pass);
+      renderer.setRenderTarget(null);
+      renderer.render(scene, cam);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      let n = 0;
+      for (let i = 0; i < px.length; i += 4) {
+        const r = px[i], g = px[i + 1], b = px[i + 2];
+        if (pass === 1 ? (r > 200 && g < 60 && b > 200) : (r > 200 && g < 60 && b < 60)) n++;
+      }
+      return n;
+    };
+    const voidN = count(1);
+    const backN = count(2);
+    const url = image ? canvas.toDataURL('image/png') : null;
+    scene.background = bg;
+    for (const [o, m] of saved) o.material = m;
+    for (const o of hidden) o.visible = true;
+    for (const m of made.values()) m.dispose();
+    return { void: voidN / (w * h), back: backN / (w * h), voidPx: voidN, backPx: backN, url };
+  },
+  /** Luma (sRGB, Rec. 709, 0-255) percentiles of the frame just drawn. */
+  lumaStats() {
+    const w = gl.drawingBufferWidth;
+    const h = gl.drawingBufferHeight;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < px.length; i += 4) hist[Math.min(255, Math.round(0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]))]++;
+    const q = (f) => { let acc = 0; const n = f * w * h; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= n) return v; } return 255; };
+    return { p10: q(0.1), p50: q(0.5), p90: q(0.9) };
+  },
+  /**
+   * The real loop: requestAnimationFrame for `seconds`, the eye on a head
+   * path, frame intervals recorded (what the app's perf summary counts).
+   */
+  rafRun(seconds = 10, pathName = 'sway') {
+    const p = PATHS[pathName];
+    const auto = state.auto;
+    state.auto = false;
+    return new Promise((done) => {
+      const iv = [];
+      let prev = null;
+      const t0 = performance.now();
+      const tick = (now) => {
+        if (prev !== null) iv.push(now - prev);
+        prev = now;
+        const t = (now - t0) / 1000;
+        state.eye.set(...p.at(t % p.duration));
+        state.time += 1 / 60;
+        frame(now, { dt: 1 / 60 });
+        if (now - t0 < seconds * 1000) requestAnimationFrame(tick);
+        else {
+          state.auto = auto;
+          const s = iv.slice().sort((a, b) => a - b);
+          const q = (f) => s[Math.min(s.length - 1, Math.floor(f * s.length))];
+          done({ frames: iv.length, fps: (1000 * iv.length) / iv.reduce((a, b) => a + b, 0), p50: q(0.5), p95: q(0.95), p99: q(0.99), max: s[s.length - 1], over20: iv.filter((v) => v > 20).length });
+        }
+      };
+      requestAnimationFrame(tick);
+    });
+  },
   // Viewer's view only: where the phone (the real eye) is, when the image is
   // drawn from a different eye (Look around, Strength above 1x). null: the same eye.
   setViewerEye(x, y, z) { state.viewerEye = x === null || x === undefined ? null : new THREE.Vector3(x, y, z); },
@@ -404,8 +550,8 @@ window.__lab = {
     made.push(black);
     scene.traverse((o) => {
       if (!(o.isMesh || o.isPoints || o.isLine) || !o.visible) return;
-      if (spec.hide.includes(o.name) || o.userData.checkExclude) { o.visible = false; hidden.push(o); return; }
-      const entries = spec.classes.filter((c) => c.names.includes(o.name));
+      if (nameIn(spec.hide, o.name) || o.userData.checkExclude) { o.visible = false; hidden.push(o); return; }
+      const entries = spec.classes.filter((c) => nameIn(c.names, o.name));
       let mat = black;
       if (entries.length) {
         const e = entries[0];
@@ -418,7 +564,7 @@ window.__lab = {
     const bg = scene.background;
     scene.background = new THREE.Color(0, 0, 0);
     const s = windowSize();
-    applyWindowCamera(camera, state.eye, s.width, s.height, { near: 0.01, far: 60 });
+    placeCamera(camera, state.eye, s);
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     const url = canvas.toDataURL('image/png');

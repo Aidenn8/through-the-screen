@@ -71,6 +71,16 @@ function shellGeometry(baseGeo, shells) {
   return merged;
 }
 
+// Where the pole's top end is clamped under the grid (real m): the pole
+// carries on up past the pivot along the same line (backstage.js rigs it).
+const MIC0 = [-0.32, 2.88, 6.68];
+const PIVOT0 = [0.96, 6.8, 2.56];
+export const BOOM_TOP = (() => {
+  const d = PIVOT0.map((v, k) => v - MIC0[k]);
+  const t = (8.4 - PIVOT0[1]) / d[1];
+  return PIVOT0.map((v, k) => v + d[k] * t);
+})();
+
 export class BoomMic {
   /**
    * @param {object} m materials
@@ -101,6 +111,17 @@ export class BoomMic {
       const collar = new THREE.Mesh(new THREE.CylinderGeometry(r * 1.35, r * 1.35, 0.05, 10), m.gripSilver);
       collar.position.y = -b * len + 0.03;
       arm.add(collar);
+    }
+    // the pole's upper part, past the pivot to its clamp under the grid
+    {
+      const ext = new THREE.Vector3(...BOOM_TOP).sub(this.pivot).length();
+      const up = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, ext, 16), pole);
+      up.position.y = ext / 2;
+      up.castShadow = true;
+      arm.add(up);
+      const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.3, 12), m.cableBlack);
+      grip.position.y = 0.2;
+      arm.add(grip);
     }
     // cable spiralling along the pole
     const pts = [];

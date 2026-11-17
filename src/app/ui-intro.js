@@ -73,7 +73,7 @@ export class IntroCard {
     this.#render(
       'Look through your screen',
       [
-        h('p', { class: 'lead', text: 'Your camera follows your eye and redraws the scene from exactly where it is, so the scene holds still in space as you move. Lean to look around things.' }),
+        h('p', { class: 'lead', text: 'Your camera follows your eye and redraws the scene from exactly where it is, so the scene holds still in space as you move. Lean to look around things; use the arrow keys, or drag, to move around the set.' }),
         fsStep,
         this.#eyeChoice(),
         this.#privacy(),

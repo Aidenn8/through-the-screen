@@ -29,6 +29,8 @@ html, body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  /* A sideways two-finger swipe turns the view; it must never go back a page. */
+  overscroll-behavior: none;
   background: #000;
   color: var(--text);
   font: 13px/1.45 var(--font);
@@ -152,6 +154,75 @@ button {
 .chip-btn[aria-expanded='true'], .icon-btn[aria-pressed='true'] { background: rgba(255, 255, 255, 0.12); }
 
 .icon-btn svg { width: 17px; height: 17px; }
+
+/* Places (stations) ------------------------------------------------------ */
+
+.stations {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  max-width: calc(100vw - 32px);
+}
+
+.stations-list {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.stations .chip-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stations .chip-btn:hover { color: var(--text); }
+.stations .chip-btn[aria-current='true'] { color: var(--text); background: rgba(255, 255, 255, 0.12); }
+
+.stations .sep {
+  width: 1px;
+  height: 14px;
+  background: var(--line-strong);
+  margin: 0 3px;
+  flex: none;
+}
+
+.tour-btn { display: flex; align-items: center; gap: 5px; flex: none; }
+.tour-btn svg { width: 13px; height: 13px; }
+.stations .tour-btn[aria-pressed='true'] { color: var(--text); background: rgba(255, 255, 255, 0.12); }
+
+/* The scene menu opens where the strip sits. */
+.menu:not([hidden]) ~ .stations { opacity: 0; pointer-events: none; }
+
+/* The name of a place, shown briefly on arrival (not faded with the dock). */
+.caption {
+  position: fixed;
+  left: 50%;
+  top: 22px;
+  transform: translate(-50%, -4px);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.caption.on { opacity: 1; transform: translate(-50%, 0); transition-duration: 0.25s; }
+.toast:not([hidden]) ~ .caption { top: 72px; }
 
 /* Menu ------------------------------------------------------------------ */
 
@@ -487,10 +558,17 @@ input[type='range'] {
 
 @media (prefers-reduced-motion: reduce) {
   .fades { transition: none; }
+  .caption, .caption.on { transition: none; transform: translate(-50%, 0); }
   .sheet { animation: none; }
   .spinner { animation-duration: 2.4s; }
 }
 
 @media (max-width: 560px) {
   .status .label { display: none; }
+  .tour-btn span { display: none; }
 }
+
+/* Moving around (settings): one control per line. */
+.keys { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.keys li { display: grid; grid-template-columns: 104px 1fr; gap: 10px; align-items: baseline; font-size: 12px; color: var(--muted); }
+.keys kbd { font: inherit; color: var(--text); white-space: nowrap; }

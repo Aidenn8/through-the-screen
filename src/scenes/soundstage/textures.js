@@ -628,6 +628,31 @@ export function streetDrop({ w = 2048, h = 1366, road = [0.05, 0.52], vp = [0.29
   sky.addColorStop(1, '#5a4236');
   c.fillStyle = sky;
   c.fillRect(0, 0, w, h);
+  // the ground below the horizon: dark wet pavement and building bases,
+  // kerbs converging on the vanishing point, shop light spilling on it
+  {
+    const gnd = c.createLinearGradient(0, VY, 0, h);
+    gnd.addColorStop(0, '#1e1819');
+    gnd.addColorStop(1, '#0b090a');
+    c.fillStyle = gnd;
+    c.fillRect(0, VY, w, h - VY);
+    for (let k = 0; k < 40; k++) {
+      const t = Math.pow(r(), 1.6);
+      const side = r() < 0.5 ? -1 : 1;
+      const x = VX + side * (40 + t * w * 0.7);
+      const y = VY + (h - VY) * (0.05 + t * 0.9);
+      const g = c.createRadialGradient(x, y, 0, x, y, 20 + t * 140);
+      g.addColorStop(0, 'rgba(200,140,80,0.35)');
+      g.addColorStop(1, 'rgba(200,140,80,0)');
+      c.fillStyle = g;
+      c.fillRect(x - 160, y - 160, 320, 320);
+    }
+    c.strokeStyle = 'rgba(120,110,100,0.5)';
+    c.lineWidth = 3;
+    for (const xe of [road[0] * w - 60, road[1] * w + 60]) {
+      c.beginPath(); c.moveTo(xe, h); c.lineTo(VX, VY); c.stroke();
+    }
+  }
   // far skyline across the horizon, windows as dots
   for (let x = -10; x < w;) {
     const bw = 30 + r() * 90;
@@ -665,7 +690,8 @@ export function streetDrop({ w = 2048, h = 1366, road = [0.05, 0.52], vp = [0.29
           const yb = yBot + (VY - yBot) * t;
           return [x, yt + (yb - yt) * sv];
         };
-        const q = [pt(t0, a), pt(t1, a), pt(t1, b), pt(t0, b)];
+        const ja = (r() - 0.5) * 0.25 / floors, jb = (r() - 0.5) * 0.25 / floors;
+        const q = [pt(t0, a + ja), pt(t1 + (r() - 0.5) * 0.004, a + ja), pt(t1, b + jb), pt(t0, b + jb)];
         const on = r() < (litFloor ? 0.7 : 0.16);
         c.fillStyle = on ? (r() < 0.15 ? '#7a90a8' : (r() < 0.5 ? '#d09858' : '#a87444')) : 'rgba(0,0,0,0.35)';
         c.beginPath(); c.moveTo(...q[0]); for (const p of q.slice(1)) c.lineTo(...p); c.closePath(); c.fill();
@@ -744,31 +770,8 @@ export function streetDrop({ w = 2048, h = 1366, road = [0.05, 0.52], vp = [0.29
   c.fillStyle = hz;
   c.fillRect(0, 0, w, h);
   overlayNoise(c, w, h, 0.12, 'overlay', 3);
-  // what gives a translight away up close: the lamps behind it make soft hot
-  // spots in a grid, the edges fall off, and the printed panels are sewn
-  // together in vertical seams
-  c.save();
-  c.globalCompositeOperation = 'multiply';
-  const vg = c.createRadialGradient(w * 0.5, h * 0.55, h * 0.2, w * 0.5, h * 0.55, w * 0.75);
-  vg.addColorStop(0, '#ffffff');
-  vg.addColorStop(1, '#6a6a6a');
-  c.fillStyle = vg;
-  c.fillRect(0, 0, w, h);
-  c.restore();
-  c.save();
-  c.globalCompositeOperation = 'screen';
-  for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) {
-    const x = (i + 0.5) / 6 * w;
-    const y = (j + 0.5) / 3 * h;
-    const g = c.createRadialGradient(x, y, 0, x, y, w * 0.11);
-    g.addColorStop(0, 'rgba(70,58,46,0.55)');
-    g.addColorStop(1, 'rgba(70,58,46,0)');
-    c.fillStyle = g;
-    c.fillRect(x - w * 0.11, y - w * 0.11, w * 0.22, w * 0.22);
-  }
-  c.restore();
-  c.fillStyle = 'rgba(0,0,0,0.45)';
-  for (let k = 1; k < 8; k++) c.fillRect((k / 8) * w - 1, 0, 3, h);
+  // (the hot spots of the lamps behind it, the panels and their seams are
+  // drawn by its material at their real size: materials.js translightDetail)
   c.fillStyle = 'rgba(0,0,0,0.6)';
   c.fillRect(0, 0, w, 10);
   c.fillRect(0, h - 10, w, 10);

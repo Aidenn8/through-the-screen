@@ -77,6 +77,66 @@ function interior(o, k = 0.5, tint = 0xffc890) {
   return m;
 }
 
+// Detail for textures seen at life size (a 512 px brick or plywood tile is
+// magnified ten times or more there): the brick's mortar drawn sharp from the
+// layout the texture was painted with, each brick's colour taken from its
+// middle (the map's own edges are blurred into the mortar), grain on the
+// faces; plywood gets fine grain along the sheet. Fades out where the map is
+// minified (from the shot it is the map as it was).
+const DETAIL_GLSL = /* glsl */ `
+  float dtH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float dtN(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(dtH(i), dtH(i + vec2(1.0, 0.0)), f.x), mix(dtH(i + vec2(0.0, 1.0)), dtH(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+`;
+export function addDetail(material, kind, { cols = 8, rows = 24, size = 512, parity = 1 } = {}) {
+  const prev = material.onBeforeCompile;
+  const code = kind === 'brick' ? /* glsl */ `
+    {
+      vec2 bu = vMapUv * vec2(${cols}.0, ${rows}.0);
+      float row = floor(bu.y);
+      float shift = mod(row + ${parity}.0, 2.0) * 0.5;
+      bu.x -= shift;
+      vec2 cell = floor(bu);
+      vec2 f = bu - cell;
+      vec2 texels = vec2(${size / cols}.0, ${(size / rows).toFixed(4)});
+      vec2 w = max(fwidth(bu) * texels, vec2(1e-4));
+      vec2 dEdge = min(f, 1.0 - f) * texels;
+      vec2 inside = smoothstep(vec2(1.5) - 0.5 * w, vec2(1.5) + 0.5 * w, dEdge);
+      float brickMask = inside.x * inside.y;
+      vec3 mid = texture2D(map, (cell + vec2(0.5 + shift, 0.5)) / vec2(${cols}.0, ${rows}.0)).rgb;
+      vec3 face = mix(mid, sampledDiffuseColor.rgb, smoothstep(1.5, 4.5, min(dEdge.x, dEdge.y)));
+      float g = 0.6 * dtN(bu * vec2(26.0, 9.0)) + 0.4 * dtN(bu * vec2(70.0, 23.0));
+      vec3 mortar = vec3(0.092, 0.08, 0.069) * (0.8 + 0.4 * dtN(bu * vec2(40.0, 40.0)));
+      vec3 sharp = mix(mortar, face * (0.9 + 0.2 * g), brickMask);
+      float near = 1.0 - smoothstep(0.35, 0.9, max(w.x, w.y));
+      sampledDiffuseColor.rgb = mix(sampledDiffuseColor.rgb, sharp, near);
+    }` : /* glsl */ `
+    {
+      vec2 tu = vMapUv * vec2(${size}.0);
+      float w = max(fwidth(tu.x), fwidth(tu.y));
+      float near = 1.0 - smoothstep(0.35, 0.9, w);
+      float g = 0.55 * dtN(vMapUv * vec2(260.0, 7.0)) + 0.3 * dtN(vMapUv * vec2(700.0, 18.0)) + 0.15 * dtN(vMapUv * vec2(1600.0, 900.0));
+      sampledDiffuseColor.rgb *= mix(1.0, 0.9 + 0.2 * g, near);
+    }`;
+  material.onBeforeCompile = (shader, renderer) => {
+    prev?.call(material, shader, renderer);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${DETAIL_GLSL}`)
+      .replace('#include <map_fragment>', `#ifdef USE_MAP
+        vec4 sampledDiffuseColor = texture2D(map, vMapUv);
+        ${code}
+        diffuseColor *= sampledDiffuseColor;
+      #endif`);
+  };
+  const prevKey = material.customProgramCacheKey?.bind(material);
+  material.customProgramCacheKey = () => `${prevKey ? prevKey() : ''}-detail-${kind}`;
+  material.needsUpdate = true;
+  return material;
+}
+
 // Emissive surfaces are plain unlit colours in HDR (values above 1 bloom).
 export function glow(color, intensity, extra = {}) {
   const c = new THREE.Color(color).multiplyScalar(intensity);
@@ -111,6 +171,48 @@ export function limbGlow(color, intensity, { edge = 0.2, power = 1.4, saturate =
   return m;
 }
 
+// A translight up close (the street's end, 12 x 8 m): lit from behind by a
+// grid of sky pans, so it glows in soft hot spots with darker gaps and edges;
+// printed in eight panels 1.5 m wide, each a shade different, sewn together
+// in seams that pass less light; brush streaks and grain in the paint; a hem
+// with grommets top and bottom. All at real size from the uv (w x h metres),
+// so it holds at the "The backdrop" station and costs nothing far away.
+export function translightDetail(m, { w, h, panels = 8, lamps = [6, 3] }) {
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        float tlH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float tlN(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(tlH(i), tlH(i + vec2(1.0, 0.0)), f.x), mix(tlH(i + vec2(0.0, 1.0)), tlH(i + vec2(1.0, 1.0)), f.x), f.y); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        {
+          vec2 P = vMapUv * vec2(${w.toFixed(2)}, ${h.toFixed(2)});
+          float bl = 0.0;
+          for (int i = 0; i < ${lamps[0]}; i++) for (int j = 0; j < ${lamps[1]}; j++) {
+            vec2 c = vec2((float(i) + 0.5) * ${(w / lamps[0]).toFixed(3)}, (float(j) + 0.5) * ${(h / lamps[1]).toFixed(3)});
+            vec2 d = P - c;
+            bl += exp(-dot(d, d) / 1.3);
+          }
+          float light = 0.42 + 0.68 * min(bl, 1.25);
+          float pu = P.x / ${(w / panels).toFixed(3)};
+          float ph = tlH(vec2(floor(pu), 3.7));
+          vec3 tint = vec3(1.0 + (ph - 0.5) * 0.07, 1.0 + (ph - 0.5) * 0.02, 1.0 - (ph - 0.5) * 0.06);
+          float sd = abs(fract(pu + 0.5) - 0.5) * ${(w / panels).toFixed(3)};
+          float seam = 1.0 - 0.42 * (1.0 - smoothstep(0.005, 0.013, sd)) - 0.08 * (1.0 - smoothstep(0.013, 0.035, sd));
+          float strokes = 0.6 * tlN(P * vec2(5.0, 48.0) + vec2(tlN(P * 2.0) * 3.0, 0.0)) + 0.4 * tlN(P * vec2(13.0, 110.0));
+          float grain = tlN(P * 420.0);
+          float paint = 0.88 + 0.2 * strokes + 0.06 * (grain - 0.5);
+          float edge = min(P.y, ${h.toFixed(2)} - P.y);
+          float hem = mix(0.45, 1.0, smoothstep(0.05, 0.065, edge));
+          vec2 g = vec2(mod(P.x, 0.3) - 0.15, edge - 0.03);
+          float grommet = 1.0 - 0.8 * (1.0 - smoothstep(0.008, 0.013, length(g))) * step(edge, 0.05);
+          diffuseColor.rgb *= light * tint * seam * paint * hem * grommet;
+        }`);
+  };
+  m.customProgramCacheKey = () => `translight-${w}-${h}-${panels}`;
+  return m;
+}
+
 export function createMaterials(envMap = null) {
   const brickT = T.brick({ seed: 5, base: [118, 54, 40] });
   const brick2T = T.brick({ seed: 9, base: [86, 62, 52] });
@@ -119,7 +221,7 @@ export function createMaterials(envMap = null) {
   const tileT = T.tiles({ color: [30, 74, 70], grout: [70, 72, 66] });
   const stuccoT = T.paintSurface({ base: [150, 140, 122], seed: 13, grime: 0.6, size: 2.5 });
   const signT = T.paintSurface({ base: [214, 200, 168], seed: 17, grime: 0.25, size: 2 });
-  const wallInT = T.paintSurface({ base: [190, 150, 104], seed: 19, grime: 0.2, size: 2 });
+  const wallInT = T.paintSurface({ base: [200, 168, 126], seed: 19, grime: 0.2, size: 2 });
   const pineT = T.pine();
   const luanT = T.luan();
   const floorT = T.stageFloor();
@@ -149,8 +251,8 @@ export function createMaterials(envMap = null) {
     asphalt: std({ map: asphaltT.map, normalMap: asphaltT.normalMap, normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.85 }),
     sidewalk: std({ map: walkT.map, normalMap: walkT.normalMap, roughness: 0.8 }),
     curb: lam({ map: walkT.map, color: 0x9a968e }),
-    brick: lam({ map: brickT.map, normalMap: brickT.normalMap }),
-    brick2: lam({ map: brick2T.map, normalMap: brick2T.normalMap }),
+    brick: addDetail(lam({ map: brickT.map, normalMap: brickT.normalMap }), 'brick'),
+    brick2: addDetail(lam({ map: brick2T.map, normalMap: brick2T.normalMap }), 'brick'),
     tile: std({ map: tileT.map, normalMap: tileT.normalMap, roughness: 0.2, envMap, envMapIntensity: 0.6 }),
     tileIn: interior({ map: tileT.map }, 1.1),
     stucco: lam({ map: stuccoT.map, normalMap: stuccoT.normalMap }),
@@ -161,17 +263,21 @@ export function createMaterials(envMap = null) {
     // satin anodised frames: sharp env glints on these thin edges crawl under head motion
     aluminum: std({ color: 0x8a9096, metalness: 1, roughness: 0.5, envMap, envMapIntensity: 0.55 }),
     darkMetal: lam({ color: 0x1a1c1f }),
-    castIron: std({ color: 0x111315, metalness: 0.55, roughness: 0.42 }),
+    // (both sides: the work bulbs' cages are open tubes, seen into from above)
+    castIron: std({ color: 0x111315, metalness: 0.55, roughness: 0.42, side: THREE.DoubleSide }),
     glass: std({ color: 0x0e1416, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.18, envMap, envMapIntensity: 0.45, depthWrite: false }),
-    blinds: interior({ color: 0xb8a684, side: THREE.DoubleSide }, 2.2, 0xffb070),
-    wallIn: interior({ map: wallInT.map }, 2.0),
-    checker: interior({ map: checkerT.map }, 1.0),
+    // the room is lit by its practicals (interior.js work lights); these
+    // are the fill left between them (the blinds also glow with the light
+    // through them, seen from the street)
+    blinds: interior({ color: 0xb8a684, side: THREE.DoubleSide }, 1.5, 0xffb070),
+    wallIn: interior({ map: wallInT.map }, 0.3),
+    checker: interior({ map: checkerT.map }, 0.1),
     counter: interior({ color: 0x8a1c1c }, 2.0),
     counterTop: interior({ color: 0xb8ac90 }, 1.4),
     vinyl: interior({ color: 0x9a1717 }, 1.6),
     wood: lam({ map: pineT.map, color: 0x9a7a58 }),
     pine: lam({ map: pineT.map }),
-    luan: lam({ map: luanT.map }),
+    luan: addDetail(lam({ map: luanT.map }), 'wood'),
     flatEdge: lam({ color: 0x5e5246 }),
     deckEdge: lam({ color: 0x1b1b1c }),
     stageFloor: lam({ map: floorT.map }),
@@ -247,7 +353,9 @@ export function createMaterials(envMap = null) {
     fruit: lam({ color: 0xb8541a }),
     doorSteel: lam({ color: 0x4a5058 }),
     // the street's far end (streetend.js): the painted translight, lit from behind
-    streetDrop: new THREE.MeshBasicMaterial({ map: dropT, color: new THREE.Color(1, 0.96, 0.9).multiplyScalar(0.85) }),
+    // (both sides: from behind, a translight shows its picture mirrored)
+    streetDrop: translightDetail(new THREE.MeshBasicMaterial({ map: dropT, color: new THREE.Color(1, 0.96, 0.9).multiplyScalar(0.85), side: THREE.DoubleSide }), { w: 12, h: 8 }),
+    skyPan: glow(0xfff0dc, 2.6),
     hoseRed: lam({ color: 0x7a2a1c }),
     tapeRed: lam({ color: 0x9a1810 }),
     // worn road paint, wet: a little lighter than the asphalt, not tape-bright
@@ -262,14 +370,36 @@ export function createMaterials(envMap = null) {
     carTyre: lam({ color: 0x0a0a0a }),
     carLamp: std({ color: 0x3c4246, roughness: 0.05, metalness: 0.2 }),
     carTail: std({ color: 0x380606, roughness: 0.12 }),
-    carWhitewall: lam({ color: 0x8e8a80 }),
+    carWhitewall: lam({ color: 0x4a4844 }),
     spaceLight: lam({ color: 0x5e5a54, side: THREE.DoubleSide }),
+    // the A-camera and its dolly (front.js), the gear out front
+    camBlack: std({ color: 0x151517, roughness: 0.42, metalness: 0.3, envMap, envMapIntensity: 0.7 }),
+    camBody: std({ color: 0x2c2e33, roughness: 0.5, metalness: 0.25, envMap, envMapIntensity: 0.6 }),
+    camRubber: lam({ color: 0x0f0f10 }),
+    camGlass: std({ color: 0x0a1222, roughness: 0.04, metalness: 0.6, envMap, envMapIntensity: 1.6 }),
+    camMetal: std({ color: 0xa4a8ac, metalness: 1, roughness: 0.32, envMap, envMapIntensity: 0.9 }),
+    camWhite: lam({ color: 0xdedad0 }),
+    camRed: std({ color: 0x8a1a12, roughness: 0.5, envMap, envMapIntensity: 0.4 }),
+    camScreen: glow(0x7aa0c8, 1.0),
+    camTally: glow(0xff2a14, 5.0),
+    camBattery: std({ color: 0x1c1d20, roughness: 0.62, metalness: 0.1, envMap, envMapIntensity: 0.4 }),
+    dollySilver: std({ color: 0xa2a6aa, metalness: 0.9, roughness: 0.38, envMap, envMapIntensity: 0.9 }),
+    dollyDeck: lam({ color: 0x55585c }),
+    dollySeat: lam({ color: 0x141414 }),
+    dollyBlack: std({ color: 0x18181a, roughness: 0.5, metalness: 0.3, envMap, envMapIntensity: 0.6 }),
+    caseOrange: std({ color: 0x8a6a1c, roughness: 0.55, envMap, envMapIntensity: 0.3 }),
+    tubeLamp: limbGlow(0xeef4ff, 3.2, { edge: 0.4, power: 1.0 }),
+    // the 12 x 12 bounce, lit by the HMI beside it (its light is not in the scene: the set's fill stands for it)
+    bounce: glow(0xfff2e0, 0.28),
+    bounceBack: lam({ color: 0x161616 }),
+    crew_people: new THREE.MeshLambertMaterial({ vertexColors: true }),
     diffusionBack: lam({ color: 0x0c0c0c }),
     redLight: glow(0xff1a10, 14),
     monitor: glow(0x6a8ab0, 2.2),
     interiorGlow: glow(0xffc890, 2.5),
     passThrough: glow(0xffc890, 2.6),
     windowLit: glow(0xffc27a, 3.2),
+    transomGlow: glow(0xffc27a, 3.2, { depthWrite: false }),
     windowDim: glow(0x6a7a8a, 0.35),
   };
   return m;

@@ -11,8 +11,12 @@ export const ROOF_Y = 14.5;
 export const GRID_Y = 8.6;
 const WALL_X = 14;
 const BACK_Z = -17;
-const FRONT_Z = 9;
+// the front wall: well behind the A-camera (z 16) and the farthest eye the
+// shot allows (window z 1.4: real z 28.8)
+const FRONT_Z = 32;
 const CAT_Y = 10.4; // side catwalks, above the pipe grid
+// the inside faces of the building (real metres), for the nav bounds and tests
+export const ROOM = { x: WALL_X - 0.15, back: BACK_Z + 0.15, front: FRONT_Z - 0.15, roof: ROOF_Y - 1.7, catwalk: CAT_Y };
 
 export function buildStageShell(B, m) {
   const noShadow = { cast: false, receive: false };
@@ -21,6 +25,9 @@ export function buildStageShell(B, m) {
   const zc = (FRONT_Z + BACK_Z) / 2;
   // walls: acoustic panels with vertical ribs, up to the roof
   B.box('stageWall', m.stageWall, [2 * WALL_X + 2, H, 0.3], [0, H / 2, BACK_Z]);
+  B.box('stageWall', m.stageWall, [2 * WALL_X + 2, H, 0.3], [0, H / 2, FRONT_Z]);
+  for (let x = -13; x <= 13; x += 1.2) if (Math.abs(x + 6) > 3.4) B.box('stageWall', m.stageWall, [0.12, H - 1, 0.1], [x, (H - 1) / 2, FRONT_Z - 0.2], [0, 0, 0], noShadow);
+  B.box('blackPaint', m.blackPaint, [2 * WALL_X, 0.25, 0.05], [0, 0.125, FRONT_Z - 0.27], [0, 0, 0], noShadow);
   for (const s of [-1, 1]) B.box('stageWall', m.stageWall, [0.3, H, len], [s * WALL_X, H / 2, zc]);
   for (let x = -13; x <= 13; x += 1.2) B.box('stageWall', m.stageWall, [0.12, H - 1, 0.1], [x, (H - 1) / 2, BACK_Z + 0.2], [0, 0, 0], noShadow);
   for (let z = BACK_Z + 1; z <= FRONT_Z - 1; z += 1.2) {
@@ -50,7 +57,7 @@ export function buildStageShell(B, m) {
   // work bulbs on cords from the trusses' bottom chords: the hot points of a
   // dark roof (ss03), and what lights the steel around them
   const trussBulbs = [];
-  for (const [x, z] of [[-7, -7], [0, -11], [7, -7], [-3, 1], [8, 1], [-9, 5]]) {
+  for (const [x, z] of [[-7, -7], [0, -11], [7, -7], [-3, 1], [8, 1], [-9, 5], [4, 13], [-8, 17], [7, 21], [-2, 25]]) {
     const zz = Math.round((z - (BACK_Z + 2)) / 4) * 4 + BACK_Z + 2;
     const p = [x, bot - 0.9, zz];
     B.rod('cableBlack', m.cableBlack, [x, bot, zz], [x, p[1] + 0.1, zz], 0.012, 4, noShadow);
@@ -63,7 +70,12 @@ export function buildStageShell(B, m) {
   // as walls from the low, wide eyes instead of as a black void
   for (const [x, y, z, ry] of [[WALL_X - 0.32, 7.2, -9.5, -Math.PI / 2], [WALL_X - 0.32, 7.2, -2.0, -Math.PI / 2], [WALL_X - 0.32, 7.2, 5.0, -Math.PI / 2],
     [-WALL_X + 0.32, 7.2, -9.5, Math.PI / 2], [-WALL_X + 0.32, 7.2, -2.0, Math.PI / 2], [-WALL_X + 0.32, 7.2, 5.0, Math.PI / 2],
-    [-7, 7.2, BACK_Z + 0.32, 0], [7, 7.2, BACK_Z + 0.32, 0]]) {
+    [-7, 7.2, BACK_Z + 0.32, 0], [7, 7.2, BACK_Z + 0.32, 0],
+    [WALL_X - 0.32, 7.2, 13.0, -Math.PI / 2], [WALL_X - 0.32, 7.2, 22.0, -Math.PI / 2], [-WALL_X + 0.32, 7.2, 13.0, Math.PI / 2], [-WALL_X + 0.32, 7.2, 22.0, Math.PI / 2],
+    [6, 7.2, FRONT_Z - 0.32, Math.PI], [-1, 9.5, FRONT_Z - 0.32, Math.PI],
+    // up at catwalk height at the camera end, so the walls there read from the catwalks
+    [-WALL_X + 0.32, 9.2, 27.5, Math.PI / 2], [WALL_X - 0.32, 9.2, 27.5, -Math.PI / 2], [-WALL_X + 0.32, 9.2, 17.5, Math.PI / 2], [WALL_X - 0.32, 9.2, 17.5, -Math.PI / 2],
+    [-9, 9.2, FRONT_Z - 0.32, Math.PI], [9, 9.2, FRONT_Z - 0.32, Math.PI]]) {
     const T = mat4([x, y, z], [0, ry, 0]);
     B.add('blackPaint', m.blackPaint, new THREE.BoxGeometry(0.4, 0.3, 0.25), T, noShadow);
     B.add('bulb', m.bulb, new THREE.PlaneGeometry(0.3, 0.18), new THREE.Matrix4().multiplyMatrices(T, mat4([0, 0, 0.13])), noShadow);
@@ -93,8 +105,20 @@ export function buildStageShell(B, m) {
     }
   }
 
+  // caged lights on the wall over each catwalk, every 10 m, so the walkway
+  // reads from the catwalks themselves (they light the grating only)
+  const railBulbs = [];
+  for (const s of [-1, 1]) {
+    for (let z = BACK_Z + 5; z <= FRONT_Z - 2; z += 10) {
+      const p = [s * (WALL_X - 0.3), CAT_Y + 1.9, z];
+      B.add('castIron', m.castIron, new THREE.CylinderGeometry(0.08, 0.08, 0.18, 8, 1, true), mat4(p, [0, 0, Math.PI / 2]), noShadow);
+      B.add('bulb', m.bulb, new THREE.SphereGeometry(0.05, 10, 8), mat4(p), noShadow);
+      B.add('glowFlood', m.glowFlood, new THREE.PlaneGeometry(2.2, 2.2), mat4([s * (WALL_X - 0.17), CAT_Y + 1.4, z], [0, -s * Math.PI / 2, 0]), noShadow);
+      railBulbs.push(p);
+    }
+  }
   // chain motors on the trusses' bottom chords, their chains carrying the grid
-  const motors = [[-10, -11], [-4, -11], [4, -11], [10, -11], [-10, -3], [-4, -3], [4, -3], [10, -3], [-7, 5], [7, 5]];
+  const motors = [[-10, -11], [-4, -11], [4, -11], [10, -11], [-10, -3], [-4, -3], [4, -3], [10, -3], [-7, 5], [7, 5], [-9, 13], [9, 13], [-5, 21], [6, 25]];
   for (const [x, z0] of motors) {
     const z = Math.round((z0 - (BACK_Z + 2)) / 4) * 4 + BACK_Z + 2; // under a truss
     B.rod('darkMetal', m.darkMetal, [x, bot, z], [x, bot - 0.35, z], 0.02, 4, noShadow); // sling
@@ -128,5 +152,5 @@ export function buildStageShell(B, m) {
     B.box('blackPaint', m.blackPaint, [1.4, 0.18, 0.5], [x, GRID_Y - 0.35, z], [-0.5, 0, 0], noShadow);
     B.add('ledPanel', m.ledPanel, new THREE.PlaneGeometry(1.3, 0.42), mat4([x, GRID_Y - 0.35 - 0.092, z + 0.05], [Math.PI / 2 - 0.5, 0, 0]), noShadow);
   }
-  return { catBulbs, trussBulbs, lamps };
+  return { catBulbs, trussBulbs, railBulbs, lamps };
 }

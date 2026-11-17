@@ -322,11 +322,7 @@ export class ViewMapper {
 
   /** Keep a viewpoint where the scenes hold up and in front of the glass. */
   clamp(p) {
-    const L = this.o.limits;
-    const z = clamp(p.z, L.zMin, L.zMax);
-    const xm = Math.min(L.x, (L.xPerZ ?? Infinity) * z);
-    const ym = (L.yPerZ ?? Infinity) * z;
-    return { x: clamp(p.x, -xm, xm), y: clamp(p.y, Math.max(L.yMin, -ym), Math.min(L.yMax, ym)), z };
+    return clampToCone(p, this.o.limits);
   }
 
   /**
@@ -341,5 +337,163 @@ export class ViewMapper {
     const q = {};
     for (const k of AX) q[k] = rest[k] + g[k] * (p[k] - rest[k]) + turn[k];
     return this.clamp(q);
+  }
+}
+
+// ---------------------------------------------------------------- stations
+//
+// A place in a scene may limit head tracking there (docs/ARCHITECTURE.md,
+// station `view`): far scenes act like a long lens, where an eye moved off
+// centre mostly pans the picture, so a typical rise at 3x x 1.5 swings a
+// distant subject out of frame. At a station:
+//   - the strength used is min(the viewer's Strength, maxStrength);
+//   - verticalBoost replaces Look around's 1.5x up and down;
+//   - the rendered eye is at most maxEyeZ from the glass.
+// The mapping is linear about the rest point, so the limited eye is the
+// mapped eye's offset from the rest point scaled per axis by the ratio of
+// the limited gain to the viewer's gain. That includes head turn's steering
+// (scaled the same way), and it is applied after the motion filter, every
+// frame, so the limits can be blended smoothly over a glide.
+
+/** A station's view limits, checked: { maxStrength, verticalBoost, maxEyeZ } (missing: null). */
+export function stationLimits(v) {
+  if (!v || typeof v !== 'object') return null;
+  const pos = (x) => (Number.isFinite(x) && x > 0 ? x : null);
+  const out = {
+    maxStrength: pos(v.maxStrength),
+    verticalBoost: Number.isFinite(v.verticalBoost) && v.verticalBoost >= 0 ? v.verticalBoost : null,
+    maxEyeZ: pos(v.maxEyeZ),
+  };
+  return out.maxStrength === null && out.verticalBoost === null && out.maxEyeZ === null ? null : out;
+}
+
+/** Per-axis gains for a direction, a strength and an up-and-down boost (Look around only). */
+function gainsFor(direction, g, yBoost, o) {
+  const look = direction === 'look';
+  const s = look ? -1 : 1;
+  return { x: s * g, y: s * g * (look ? yBoost : 1), z: s * (1 + (g - 1) * o.zGainShare) };
+}
+
+/**
+ * How a station's limits scale the mapped eye's offset from the rest point,
+ * per axis (1, 1, 1 without limits), for the viewer's view setting.
+ */
+export function limitRatio(view, limits, o = VIEW_DEFAULTS) {
+  // True window is never held in (it stays exact, for filming): only the
+  // distance cap applies there (limitEye).
+  if (!limits || view?.direction === 'window' || view?.direction === undefined) return { x: 1, y: 1, z: 1 };
+  if (view.direction === 'mouse') {
+    // The mouse standing in for the head: its pointer moves the eye
+    // `strength` times as far sideways and up and down, with no extra up and
+    // down to replace; its distance does not change.
+    const g = view.strength > 0 ? view.strength : 1;
+    const r = limits.maxStrength !== null ? Math.min(g, limits.maxStrength) / g : 1;
+    return { x: r, y: r, z: 1 };
+  }
+  const g = strengthOf(view);
+  const gl = limits.maxStrength !== null ? Math.min(g, limits.maxStrength) : g;
+  const yb = limits.verticalBoost !== null ? limits.verticalBoost : o.yGainLook;
+  const a = gainsFor('look', g, o.yGainLook, o);
+  const b = gainsFor('look', gl, yb, o);
+  return { x: b.x / a.x, y: b.y / a.y, z: b.z / a.z };
+}
+
+/**
+ * Keep a viewpoint where the scenes hold up and in front of the glass: the
+ * view cone (VIEW_DEFAULTS.limits), which narrows as the eye comes closer.
+ */
+export function clampToCone(p, L = VIEW_DEFAULTS.limits) {
+  const z = clamp(p.z, L.zMin, L.zMax);
+  const xm = Math.min(L.x, (L.xPerZ ?? Infinity) * z);
+  const ym = (L.yPerZ ?? Infinity) * z;
+  return { x: clamp(p.x, -xm, xm), y: clamp(p.y, Math.max(L.yMin, -ym), Math.min(L.yMax, ym)), z };
+}
+
+/**
+ * The limits in force: a weighted mix of stations' limits (RigMotion.viewMix,
+ * weights summing to 1) blended as ratios and eye distances, so a glide from
+ * one station to another changes them smoothly.
+ * @returns {{ratio:{x,y,z}, maxEyeZ:number}}
+ */
+export function blendLimits(mix, view, o = VIEW_DEFAULTS) {
+  const ratio = { x: 0, y: 0, z: 0 };
+  let maxEyeZ = 0;
+  let total = 0;
+  // No cap: one knee beyond the view cone's own limit, so the eased cap
+  // changes nothing the cone allows (and blends from there continuously).
+  const none = o.limits.zMax + EYE_Z_KNEE;
+  for (const { view: v, w } of mix || []) {
+    const lim = stationLimits(v);
+    const r = limitRatio(view, lim, o);
+    for (const k of AX) ratio[k] += w * r[k];
+    maxEyeZ += w * (lim?.maxEyeZ ?? none);
+    total += w;
+  }
+  if (!(total > 0)) return { ratio: { x: 1, y: 1, z: 1 }, maxEyeZ: none };
+  for (const k of AX) ratio[k] /= total;
+  return { ratio, maxEyeZ: maxEyeZ / total };
+}
+
+/** How far below maxEyeZ the cap starts to ease in (m). */
+export const EYE_Z_KNEE = 0.04;
+
+/**
+ * The distance cap: z unchanged up to maxEyeZ - knee, then eased toward
+ * maxEyeZ without ever reaching past it (continuous in value and slope, so
+ * an eye leaning in, or a cap blended down over a glide, never jerks).
+ */
+export function capEyeZ(z, maxEyeZ, knee = EYE_Z_KNEE) {
+  const u = z - (maxEyeZ - knee);
+  return u <= 0 ? z : maxEyeZ - knee * Math.exp(-u / knee);
+}
+
+/** The mapped eye q limited about the rest point: offset scaled by ratio, distance capped. */
+export function limitEye(q, rest, { ratio, maxEyeZ }, o = VIEW_DEFAULTS) {
+  const out = { x: q.x, y: q.y, z: q.z };
+  // (An axis not held in is left alone: rest + 1 (q - rest) is not always q
+  // in floating point, and True window must stay bit for bit.)
+  if (finite3(rest)) for (const k of AX) if (ratio[k] !== 1) out[k] = rest[k] + ratio[k] * (q[k] - rest[k]);
+  out.z = capEyeZ(out.z, maxEyeZ);
+  // Back inside the view cone at the eye's final distance: an up-and-down
+  // boost above 1.5x can take the eye past it, and a nearer eye (the cap)
+  // has a narrower cone. (The cap is under the cone's own far limit, so this
+  // never moves the distance back out; a point the cone holds is unchanged.)
+  return clampToCone(out, o.limits);
+}
+
+/**
+ * Applies the limits every frame. The rest point it scales about is
+ * followed smoothly (Re-centre and switching eyes move the tracker's rest
+ * point at once; the tracker glides the eye across that, and this follows).
+ */
+export class StationLimiter {
+  constructor({ tauMs = 300, o = VIEW_DEFAULTS } = {}) {
+    this.tauMs = tauMs;
+    this.o = o;
+    this.pivot = null;
+    this.last = null; // { ratio, maxEyeZ } used on the last frame
+  }
+
+  reset() {
+    this.pivot = null;
+  }
+
+  /**
+   * @param {{x,y,z}} q the rendered eye before the limits (display coordinates)
+   * @param {{x,y,z}|null} rest the rest point it was mapped about
+   * @param {object} view the viewer's view setting ({ direction, strength })
+   * @param {{view:object, w:number}[]} mix the stations' limits in force
+   * @param {number} dtMs frame time
+   */
+  apply(q, rest, view, mix, dtMs) {
+    if (finite3(rest)) {
+      if (!this.pivot) this.pivot = { ...rest };
+      else {
+        const k = 1 - Math.exp(-Math.max(0, dtMs) / this.tauMs);
+        for (const a of AX) this.pivot[a] += (rest[a] - this.pivot[a]) * k;
+      }
+    }
+    this.last = blendLimits(mix, view, this.o);
+    return limitEye(q, this.pivot, this.last);
   }
 }

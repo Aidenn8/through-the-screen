@@ -1,13 +1,18 @@
 // The app: renderer and loop, eye source (camera or mouse), scenes, interface.
 
 import * as THREE from 'three';
-import { applyWindowCamera } from '../core/projection.js';
+import { applyRigCamera, normalizeNav, keepEyeInRoom, IDENTITY_POSE } from '../core/rig.js';
+import { RigMotion } from '../core/rig-motion.js';
 import {
   displaySize, readScreenInfo, viewportOnDisplay, displayToWindow, cameraPosition,
   cardCssWidth, sizeFromCard, screenMatchesPreset, panelPixelRatio,
 } from '../core/display.js';
 import { Tracker } from '../tracking/tracker.js';
-import { STRENGTH } from '../tracking/view-map.js';
+import { STRENGTH, StationLimiter } from '../tracking/view-map.js';
+
+// The mouse standing in for the head: its pointer moves the eye 1.4 times as
+// far (mouse-eye.js); that counts as its strength for the stations' limits.
+const MOUSE_VIEW = Object.freeze({ direction: 'mouse', strength: 1.4 });
 import { listCameras } from '../tracking/camera.js';
 import { CAMERA_PRESETS, guessCameraPreset, deliveredHfov } from '../tracking/camera-presets.js';
 import { MouseEye } from './mouse-eye.js';
@@ -25,8 +30,13 @@ import { RecentSamples, fovFromDistance, DISTANCE_CM } from './calibration.js';
 import { DelayCheck } from './ui-delay.js';
 import { estimateDelay } from '../tracking/latency.js';
 import { MsaaPass } from './msaa.js';
+import { keyAction, keyForControl, arrowsTaken, NAV_ACTIONS } from './keys.js';
+import { NavInput } from './nav-input.js';
+import { StationStrip, Caption } from './ui-stations.js';
 
 const IDLE_MS = 2500;
+// Keys that move the window: they do not wake the faded interface.
+const QUIET_KEYS = new Set(['forward', 'back', 'left', 'right', 'rise', 'sink', 'turnLeft', 'turnRight', 'shrink', 'grow']);
 
 export class App {
   constructor({ canvas, uiRoot, params = new URLSearchParams() }) {
@@ -64,6 +74,16 @@ export class App {
     this.sceneToken = null;
     this.eyeVec = new THREE.Vector3(0, 0, 0.6);
     this.camera3 = new THREE.PerspectiveCamera();
+    // The window's place in the scene (src/core/rig.js) and what scenes are
+    // told about it every frame: update(dt, time, eye, view).
+    this.view = { eyeWorld: new THREE.Vector3(), rig: { position: new THREE.Vector3(), quaternion: new THREE.Quaternion(), scale: 1 } };
+    this.motion = new RigMotion({}, {
+      arrive: (st) => this.#arrived(st),
+      tour: (on) => this.#tourChanged(on),
+    });
+    this.navSceneId = null;
+    this.navHintShown = false;
+    this.limiter = new StationLimiter();
     this.#initRenderer();
     this.#initUi(uiRoot);
     this.#initInput();
@@ -165,6 +185,11 @@ export class App {
       onClose: () => this.delayCheck.hide(),
     });
     this.hud = new Hud(root, { onRecord: () => this.recordLog() });
+    this.stations = new StationStrip(root, {
+      onStation: (id) => this.goToStation(id),
+      onTour: () => this.toggleTour(),
+    });
+    this.caption = new Caption(root);
     this.hud.setOpen(this.settings.hud);
   }
 
@@ -173,13 +198,30 @@ export class App {
       this.lastActivity = performance.now();
       if (document.body.classList.contains('idle')) document.body.classList.remove('idle');
     };
+    // Carrying the window through the scene: drag, swipe, pinch, wheel
+    // (src/app/nav-input.js); its keys come through #onKey.
+    this.navInput = new NavInput({
+      motion: this.motion,
+      canvas: this.canvas,
+      enabled: () => !this.steady.open && !this.intro.open && !this.card.open && !this.delayCheck.open,
+      onMove: () => this.stations.setCurrent(null),
+      arrowsTaken: () => this.sheet.open || !this.dock.menu.hidden,
+    });
+    this.navInput.attach(window);
+    // Moving the window (keys, wheel, a drag on the scene) does not wake the
+    // faded controls: moving is looking. Plain pointer movement does.
     window.addEventListener('pointermove', (e) => {
+      if (this.navInput.dragging) return; // a drag turns the window; with the mouse as the eye, the eye holds still
       activity();
       if (this.vp) this.mouse.point(e.clientX, e.clientY, this.vp);
     }, { passive: true });
-    window.addEventListener('pointerdown', activity, { passive: true });
-    document.documentElement.addEventListener('pointerleave', () => this.mouse.leave());
-    window.addEventListener('keydown', (e) => { activity(); this.#onKey(e); });
+    // (The canvas's own listener has already started a drag when it is one.)
+    window.addEventListener('pointerdown', () => { if (!this.navInput.dragging) activity(); }, { passive: true });
+    document.documentElement.addEventListener('pointerleave', () => { if (!this.navInput.dragging) this.mouse.leave(); });
+    window.addEventListener('keydown', (e) => {
+      if (!QUIET_KEYS.has(keyAction(e))) activity();
+      this.#onKey(e);
+    });
     document.addEventListener('fullscreenchange', () => {
       // The intro's first step ticks itself off.
       if (this.intro.open && this.intro.isIntro) this.intro.showIntro(this.settings.eye, { fullscreen: !!document.fullscreenElement });
@@ -196,35 +238,116 @@ export class App {
     });
   }
 
+  /** Every key goes through the one table in src/app/keys.js. */
   #onKey(e) {
-    const tag = e.target?.tagName;
-    const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
-    if (e.key === 'Escape') {
+    const action = keyAction(e);
+    if (action === 'escape') {
       if (!this.dock.menu.hidden) { this.dock.closeMenu(); this.dock.sceneBtn.focus(); return; }
       if (this.card.open) return this.card.hide();
       if (this.delayCheck.open) return this.delayCheck.hide();
       if (this.sheet.open) return this.setSettingsOpen(false);
       if (this.steady.open) return this.setSteady(false);
+      if (this.motion.tour.on) return this.motion.stopTour();
       return;
     }
-    if (typing || e.metaKey || e.ctrlKey || e.altKey || this.card.open || this.delayCheck.open) return;
-    if (e.key.toLowerCase() === 'f') { // works on the intro card too (its first step)
+    if (!action || keyForControl(e) || this.card.open || this.delayCheck.open) return;
+    if (action === 'fullscreen') { // works on the intro card too (its first step)
       this.toggleFullscreen();
       e.preventDefault();
       return;
     }
     if (this.intro.open) return;
-    const k = e.key.toLowerCase();
-    if (k === 'f') this.toggleFullscreen();
-    else if (k === 'd') this.change({ hud: !this.settings.hud });
-    else if (k === 'v') this.toggleDirection();
-    else if (k === 'r') this.recentre();
-    else if (k === 's') this.setSettingsOpen(!this.sheet.open);
-    else if (k === 'c') this.setSteady(!this.steady.open);
-    else if (k === '[' || k === ']') this.#stepScene(k === ']' ? 1 : -1);
-    else if (/^[1-9]$/.test(k) && this.scenes[Number(k) - 1]) this.loadScene(this.scenes[Number(k) - 1].id);
+    if (NAV_ACTIONS.has(action)) {
+      if (this.#navKey(e, action)) e.preventDefault();
+      return;
+    }
+    const scene = /^scene([1-9])$/.exec(action);
+    if (action === 'details') this.change({ hud: !this.settings.hud });
+    else if (action === 'direction') this.toggleDirection();
+    else if (action === 'recentre') this.recentre();
+    else if (action === 'settings') this.setSettingsOpen(!this.sheet.open);
+    else if (action === 'steady') this.setSteady(!this.steady.open);
+    else if (action === 'scenePrev' || action === 'sceneNext') this.#stepScene(action === 'sceneNext' ? 1 : -1);
+    else if (scene && this.scenes[Number(scene[1]) - 1]) this.loadScene(this.scenes[Number(scene[1]) - 1].id);
     else return;
     e.preventDefault();
+  }
+
+  /** Keys that carry the window: held moves go to NavInput, the rest here. */
+  #navKey(e, action) {
+    if (this.steady.open) return false;
+    if (this.loadingScene) return true; // between scenes: the old one's places are going, the new one's not here yet
+    if (arrowsTaken(e, { sheetOpen: this.sheet.open, menuOpen: !this.dock.menu.hidden })) return false;
+    if (!this.motion.enabled) {
+      if (!e.repeat && ['tour', 'stationNext', 'stationPrev', 'home'].includes(action)) {
+        this.#flash('This scene has no places to move to');
+      }
+      return false;
+    }
+    if (this.navInput.keyDown(e)) return true;
+    if (e.repeat) return true;
+    if (action === 'stationNext' || action === 'stationPrev') {
+      this.motion.step(action === 'stationNext' ? 1 : -1);
+      this.stations.setCurrent(this.motion.nav.stations[this.motion.last].id);
+    } else if (action === 'home') {
+      this.goToStation(this.motion.nav.stations[0].id);
+    } else if (action === 'tour') {
+      this.toggleTour();
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------- places
+
+  /** Glide to a place in the scene (the strip, N, H). */
+  goToStation(id) {
+    if (this.loadingScene || !this.motion.glideTo(id)) return;
+    this.stations.setCurrent(id);
+  }
+
+  /** T: the guided tour, on and off. */
+  toggleTour() {
+    if (this.loadingScene) return;
+    if (!this.motion.enabled) {
+      this.#flash('This scene has no places to tour');
+      return;
+    }
+    this.motion.toggleTour();
+    if (this.motion.tour.on) this.stations.setCurrent(this.motion.nav.stations[this.motion.last].id);
+  }
+
+  #arrived(st) {
+    this.stations.setCurrent(st.id);
+    this.caption.show(st.title);
+  }
+
+  #tourChanged(on) {
+    this.stations.setTour(on);
+    if (this.switchingScene) return; // a new scene ends the tour quietly
+    this.#flash(on ? 'Tour: T or any move stops it' : 'Tour stopped', on ? 3500 : 1500);
+  }
+
+  /** A new scene's places: the window starts at the first. */
+  #setNav(entry) {
+    const same = entry.id === this.navSceneId;
+    this.navSceneId = entry.id;
+    if (same) return; // the same scene built again (graphics restored): stay where you are
+    // The last scene's place name, or a word about its tour, must not linger
+    // over the new one.
+    this.caption.hide();
+    if (this.flashMsg && /^Tour/.test(this.flashMsg.text)) this.flashMsg = null;
+    const nav = normalizeNav(entry.def.nav);
+    this.switchingScene = true;
+    try {
+      this.motion.setNav(nav);
+    } finally {
+      this.switchingScene = false;
+    }
+    this.stations.setStations(nav ? nav.stations : []);
+    this.stations.setCurrent(nav ? nav.stations[0].id : null);
+    this.stations.setTour(false);
   }
 
   // ---------------------------------------------------------------- start
@@ -279,6 +402,7 @@ export class App {
     try {
       await this.tracker.start({ deviceId: this.settings.cameraId, onCamera: () => this.intro.showStarting() });
       this.input = 'camera';
+      this.limiter.reset(); // a new rest point to hold the eye about
       this.change({ inputMode: 'camera', started: true, cameraId: this.tracker.deviceId }, { quiet: true });
       await this.#refreshCameras();
       const s = this.settings;
@@ -314,6 +438,7 @@ export class App {
 
   useMouse() {
     this.input = 'mouse';
+    this.limiter.reset();
     this.tracker?.stop();
     this.tracker = null;
     this.intro.hide();
@@ -638,6 +763,8 @@ export class App {
     if (!entry) return;
     const token = {};
     this.sceneToken = token;
+    this.loadingScene = true; // places, N, H and T wait for the new scene
+    if (entry.id !== this.host.current?.id) this.caption.hide();
     if (this.host.current) await this.#fade(1, 220);
     if (this.sceneToken !== token) return;
     this.hidden = true;
@@ -651,6 +778,7 @@ export class App {
       if (fallback && fallback.id !== id) return this.loadScene(fallback.id, { save });
     }
     console.info(`Scene ${entry.id} built in ${Math.round(performance.now() - t0)} ms (behind the fade).`);
+    if (this.host.current?.id === entry.id) this.#setNav(entry);
     this.drawError = null;
     if (save) this.change({ scene: entry.id }, { quiet: true });
     this.dock.setScenes(this.scenes, this.host.current?.id);
@@ -661,6 +789,7 @@ export class App {
     await this.#settle();
     if (this.sceneToken !== token) return;
     this.hidden = false;
+    this.loadingScene = false;
     this.#fade(0, 400);
   }
 
@@ -699,6 +828,7 @@ export class App {
     this.dock.setFullscreen(!!document.fullscreenElement);
     this.dock.showTip(!fs && !this.tipDismissed && !this.intro.open && this.settings.started, { sidePanel });
     this.dock.setScenes(this.scenes, this.host.current?.id);
+    this.stations.suppress(this.steady.open || this.intro.open);
     const zoom = vp.zoom;
     this.sheet.update(this.settings, {
       cameras: this.cameras,
@@ -806,7 +936,19 @@ export class App {
     const lead = this.settings.motionMode !== 'predict' || this.settings.prediction > 0 ? 1.5 * this.vsync + 5 : 0;
     const tShow = t + lead;
     const tracking = this.input === 'camera' && this.tracker && this.tracker.state !== 'idle';
-    const eyeD = tracking ? this.tracker.sample(tShow) : this.mouse.sample(tShow);
+    let eyeD = tracking ? this.tracker.sample(tShow) : this.mouse.sample(tShow);
+    // The place the window is at may hold head tracking in (a lower
+    // strength, less up and down, the eye no farther than a wall behind):
+    // docs/ARCHITECTURE.md, station `view`. Blended over glides. Phone lens
+    // mode (always the True window at 1x: viewSetting) gets only the distance
+    // cap, like True window, so filming from far back never shows the inside
+    // of a wall; otherwise exact. Not at all in the steady check.
+    if (this.motion.enabled && !this.steady.open) {
+      const rest = tracking ? this.tracker.view.rest : this.mouse.rest;
+      eyeD = this.limiter.apply(eyeD, rest, tracking ? this.viewSetting() : MOUSE_VIEW, this.motion.viewMix(), dt);
+    } else {
+      this.limiter.last = null; // none in force (the details panel says so)
+    }
     this.frameHook?.(t, tShow, eyeD);
     const eyeW = displayToWindow(eyeD, vp);
     if (this.recorder?.active) {
@@ -814,8 +956,14 @@ export class App {
       if (log) this.#finishLog(log);
     }
     eyeW.z = Math.max(eyeW.z, 0.08);
-    applyWindowCamera(this.camera3, eyeW, vp.width, vp.height, { near: 0.005, far: 200 });
-    this.eyeVec.set(eyeW.x, eyeW.y, eyeW.z);
+    // The window's place in the scene; head tracking moves the eye on top of
+    // it. The steady check is always drawn at the glass (the default rig).
+    const pose = this.steady.open ? IDENTITY_POSE : this.motion.update(dt / 1000, this.navInput.rates(performance.now()));
+    // The eye may not leave the set's room (nav.room): it slides along a wall
+    // it is pushed against. Unchanged while inside.
+    const eyeR = this.steady.open ? eyeW : keepEyeInRoom(eyeW, pose, this.motion.nav?.room);
+    applyRigCamera(this.camera3, eyeR, vp.width, vp.height, pose, { near: 0.005, far: 200 }, this.view);
+    this.eyeVec.set(eyeR.x, eyeR.y, eyeR.z);
 
     const secs = t / 1000;
     // One scene error must not stop the loop: the status pill, resolution
@@ -825,11 +973,11 @@ export class App {
         // Nothing can draw until the browser gives the graphics back.
       } else if (this.steady.open && this.steady.inst) {
         this.steady.inst.resize(size);
-        this.steady.inst.update(dt / 1000, secs, this.eyeVec);
+        this.steady.inst.update(dt / 1000, secs, this.eyeVec, this.view);
         this.msaa.render(this.steady.inst.scene, this.camera3);
       } else if (this.host.current) {
         this.host.resize(size);
-        this.host.update(dt / 1000, secs, this.eyeVec);
+        this.host.update(dt / 1000, secs, this.eyeVec, this.view);
         this.host.render(this.camera3);
       }
     } catch (err) {
@@ -849,6 +997,11 @@ export class App {
       if (fs !== this.lastFs || (!fs && (vp.sidePanelPt > 4) !== this.lastSidePanel)) { this.lastFs = fs; this.#refreshPanels(); }
       if (this.steady.open) this.#refreshSteady();
       this.#updateIdle();
+      // Once a visit: how to move, the first time a scene with places shows.
+      if (!this.navHintShown && this.motion.enabled && !this.hidden && !this.intro.open && !this.steady.open) {
+        this.navHintShown = true;
+        this.caption.show('Arrow keys move, drag turns, T starts a tour', 5000);
+      }
     }
     if (this.hud.open) this.hud.update(this.#hudSnapshot(eyeW, vp, info, lead));
     const work = performance.now() - t0;
@@ -888,7 +1041,10 @@ export class App {
     // A problem keeps the dock (and its status pill) in view.
     const problem = this.contextLost || (this.drawError && performance.now() < this.drawError.until);
     const panelOpen = problem || this.sheet.open || this.intro.open || this.card.open || !this.dock.menu.hidden || this.hud.open;
-    const focusInUi = document.activeElement && document.activeElement !== document.body && document.activeElement.closest?.('.ui');
+    // Keyboard focus in the controls keeps them shown; a button that merely
+    // kept the focus after a click (a place, Tour) does not.
+    const a = document.activeElement;
+    const focusInUi = a && a !== document.body && a.closest?.('.ui') && a.matches?.(':focus-visible');
     const idle = !panelOpen && !focusInUi && performance.now() - this.lastActivity > IDLE_MS;
     // The steady panel stays readable; everything else fades.
     document.body.classList.toggle('idle', idle && !this.steady.open);
@@ -906,6 +1062,7 @@ export class App {
     const mode = this.input !== 'camera' ? 'mouse' : r?.mode === 'both' ? 'between the eyes' : r?.mode === 'phone' ? 'phone lens' : `${r?.mode || this.settings.eye} eye`;
     return {
       eyeWindow: eyeW,
+      place: this.#placeText(),
       view: this.viewSetting(),
       viewDirection: this.settings.viewDirection,
       motion: this.settings.motionMode === 'predict' ? `predict, look-ahead ${Math.round(this.settings.prediction * 100)} %` : `smooth follow, smoothness ${Math.round(this.settings.smoothness * 100)} %`,
@@ -932,6 +1089,21 @@ export class App {
       video: cam?.video,
       result: tr?.faceVisible ? r : null,
     };
+  }
+
+  /** Where the window is, for the details panel. */
+  #placeText() {
+    const m = this.motion;
+    if (!m.enabled) return 'at the glass (this scene has no places)';
+    const p = m.pose;
+    const at = m.at ? m.nav.stations.find((s) => s.id === m.at)?.title : 'between places';
+    // Head tracking held in here (station limits): how much of the usual
+    // movement is used sideways and up and down, and the eye's farthest.
+    const L = this.limiter.last;
+    const held = L && (L.ratio.x < 0.995 || L.ratio.y < 0.995 || L.maxEyeZ < 1.4)
+      ? `, head ${Math.round(L.ratio.x * 100)} % / ${Math.round(L.ratio.y * 100)} % up, eye ≤ ${Math.round(L.maxEyeZ * 100)} cm`
+      : '';
+    return `${at}, ${p.scale.toFixed(2)}x, turned ${Math.round(p.yaw)}°, tilted ${Math.round(p.pitch)}°${held}${m.tour.on ? ', touring' : ''}`;
   }
 
   /** Frame timing summary for tests and the details panel. */

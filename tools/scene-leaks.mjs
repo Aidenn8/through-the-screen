@@ -17,16 +17,21 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const N = Number(argv[argv.indexOf('--n') + 1] || 3) || 3;
 
+// (the GPU tests run side by side and share the lab's three ports: wait
+// for one to come free, up to 10 minutes)
 let server = null;
-for (const port of [5193, 5194, 5195]) {
-  try {
-    server = await createServer({ root, logLevel: 'error', server: { port, strictPort: true, host: '127.0.0.1', hmr: false } });
-    await server.listen();
-    server.port = port;
-    break;
-  } catch (e) {
-    server = null;
-    if (!String(e.message).includes('in use')) throw e;
+for (let tries = 0; !server && tries < 200; tries++) {
+  if (tries) await new Promise((ok) => setTimeout(ok, 3000));
+  for (const port of [5193, 5194, 5195]) {
+    try {
+      server = await createServer({ root, logLevel: 'error', server: { port, strictPort: true, host: '127.0.0.1', hmr: false } });
+      await server.listen();
+      server.port = port;
+      break;
+    } catch (e) {
+      server = null;
+      if (!String(e.message).includes('in use')) throw e;
+    }
   }
 }
 if (!server) throw new Error('ports 5193-5195 are all busy');
@@ -83,4 +88,4 @@ try {
   await browser.close();
   await server.close();
 }
-process.exitCode = failed ? 1 : 0;
+process.exit(failed ? 1 : 0);

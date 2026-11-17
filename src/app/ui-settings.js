@@ -8,6 +8,19 @@ import { STRENGTH, TURN_STRENGTH } from '../tracking/view-map.js';
 
 const EYE_MODES = [['one', 'One eye'], ['both', 'Both eyes'], ['phone', 'Phone lens']];
 
+// Carrying the window through a scene (src/app/keys.js, nav-input.js): one line each.
+const MOVE_HINTS = [
+  ['Arrow keys', 'Move forward and back, step left and right'],
+  ['Shift + arrows', 'Rise and sink, turn left and right'],
+  ['Drag', 'Turn and tilt (with the mouse: hold the button)'],
+  ['Swipe, scroll', 'Up and down move you; sideways turns'],
+  ['Pinch', 'Move forward and back'],
+  ['+ and -', 'Shrink into the set, grow back'],
+  ['N', 'Next place (Shift + N: the one before)'],
+  ['T', 'Guided tour, start and stop'],
+  ['H', 'Back to the first place'],
+];
+
 function segmented(name, options, onPick) {
   const el = h('div', { class: 'segmented', role: 'radiogroup', 'aria-label': name });
   const buttons = options.map(([value, label]) => h('button', {
@@ -166,6 +179,9 @@ export class SettingsSheet {
           r.smoothing.el,
           r.prediction.el,
           h('p', { class: 'hint', text: 'Look-ahead makes up for camera delay. Lower it if the scene overshoots when you stop moving.' }))),
+      h('section', {},
+        h('h3', { text: 'Moving around' }),
+        h('ul', { class: 'keys' }, ...MOVE_HINTS.map(([k, what]) => h('li', {}, h('kbd', { text: k }), h('span', { text: what }))))),
       h('section', {},
         h('h3', { text: 'Details' }),
         h('label', { class: 'check', for: 'set-hud' }, r.hud, 'Show tracking details (D)'),

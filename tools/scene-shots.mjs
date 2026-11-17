@@ -53,7 +53,18 @@ const [CSS_W, CSS_H] = SIZES[opt('size', 'panel')] ?? SIZES.panel;
 
 const PORTS = opt('ports', null) && opt('ports') !== true ? String(opt('ports')).split(',').map(Number) : [5193, 5194, 5195];
 
+// The GPU tests run side by side and share the lab's three ports: wait for
+// one to come free (up to 10 minutes) rather than fail.
 async function startServer() {
+  for (let tries = 0; tries < 200; tries++) {
+    const s = await tryServer();
+    if (s) return s;
+    await new Promise((ok) => setTimeout(ok, 3000));
+  }
+  throw new Error(`ports ${PORTS.join(', ')} are all busy`);
+}
+
+async function tryServer() {
   for (const port of PORTS) {
     try {
       const server = await createServer({
@@ -67,7 +78,7 @@ async function startServer() {
       if (!String(e.message).includes('in use')) throw e;
     }
   }
-  throw new Error(`ports ${PORTS.join(', ')} are all busy`);
+  return null;
 }
 
 function saveDataUrl(path, dataUrl) {
@@ -294,7 +305,9 @@ async function main() {
   if (failed) process.exitCode = 1;
 }
 
-main().catch((e) => {
+// exit when done (a dev server can keep the event loop alive after close,
+// and the GPU test then waits on this process forever)
+main().then(() => process.exit(process.exitCode ?? 0), (e) => {
   console.error(e);
   process.exit(1);
 });

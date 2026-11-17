@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { FilmPipeline } from '../_lib/pipeline.js';
 import { Haze, HazeLight } from '../_lib/haze.js';
 import { PlanarMirror, makeWet, addGlints } from '../_lib/reflect.js';
-import { SCALE, FLOOR_Y, FACADE_Z, DECK, WALK, WALK_EDGE, DINER, BRICK_WALL, RIG, CAR_AT, DROP } from './layout.js';
+import { SCALE, FLOOR_Y, FACADE_Z, DECK, WALK, WALK_EDGE, DINER, BRICK_WALL, RIG, CAR_AT, DROP, BCAM, toWindow } from './layout.js';
 import { createMaterials } from './materials.js';
 import { buildSet } from './set.js';
 import { buildBackstage } from './backstage.js';
@@ -19,6 +19,15 @@ import { addGrime } from '../_lib/grime.js';
 import { warmUp } from '../_lib/warm.js';
 import { mat4 } from '../_lib/geo.js';
 import { buildCar, CAR } from './car.js';
+import { NAV } from './nav.js';
+import { interiorMaterials, buildInterior, interiorLights, kitchenLights, backlitFigures } from './interior.js';
+import { buildACam, buildFront, crewFolk, ACAM } from './front.js';
+import { Feeds, shotPlacer } from './feeds.js';
+import { crowd } from './people.js';
+import { cStand, sandbag, cable, rollerStand } from './backstage.js';
+import { Builder } from '../_lib/geo.js';
+import { withNearAtLeast, makeDepthCamera } from '../_lib/depthcam.js';
+import { TightCull } from '../_lib/cull.js';
 
 // Dim stage environment for reflections on chrome, glass and tile: a dark
 // box with the softbox, the diner's warm glow and the cool backlight.
@@ -66,6 +75,8 @@ export default {
   id: 'soundstage',
   title: 'Soundstage',
   order: 1, // the first scene a new viewer sees
+  // stations, bounds, scale and tour for moving the window (nav.js)
+  nav: NAV,
   async create(ctx) {
     const { renderer, quality } = ctx;
     const high = quality !== 'low';
@@ -87,8 +98,69 @@ export default {
     // environment costs ~7 ms per frame at this resolution.
     const env = stageEnvironment(renderer);
     const m = createMaterials(env.texture);
+    interiorMaterials(m, renderer);
+    // the grade, shared by the frame and the monitors' feeds
+    const grade = {
+      exposure: 1.0,
+      bloom: 0.05,
+      bloomTint: new THREE.Color(1.0, 0.92, 0.88),
+      // night grade: blacks lean teal (barely lifted), highlights stay warm
+      lift: new THREE.Vector3(0.0, 0.0015, 0.004),
+      gamma: new THREE.Vector3(0.98, 1.0, 1.04),
+      gain: new THREE.Vector3(1.0, 0.97, 0.92),
+      saturation: 1.08,
+      contrast: 1.05,
+    };
+    // live pictures for the monitors (feeds.js): the shot itself, and the B camera
+    const feeds = new Feeds(renderer, { settings: grade });
+    feeds.add('shot', { w: 512, h: 322, place: (cam) => shotPlacer(size)(cam) });
+    feeds.add('bcam', { w: 448, h: 280, place: (cam) => {
+      cam.fov = 26;
+      cam.aspect = 448 / 280;
+      cam.near = 0.002;
+      cam.far = 40;
+      // just in front of the B-camera's matte box, looking where it looks
+      const lens = new THREE.Vector3(BCAM.x, BCAM.floor + BCAM.lens, BCAM.z);
+      const aim = new THREE.Vector3(...BCAM.aim);
+      const pos = lens.clone().add(aim.clone().sub(lens).normalize().multiplyScalar(0.7));
+      cam.position.set(...toWindow(pos.x, pos.y, pos.z));
+      cam.updateProjectionMatrix();
+      cam.lookAt(...toWindow(...BCAM.aim));
+      cam.updateMatrixWorld(true);
+    } });
+    m.monitorA = feeds.material('shot');
+    m.monitorB = feeds.material('bcam');
     const set = buildSet(root, m);
+    const inside = buildInterior(root, m);
     const back = buildBackstage(root, m);
+    // the camera end of the stage (front.js): shown only when the window is
+    // away from the shot (from there, the viewer is the camera)
+    const frontGroup = new THREE.Group();
+    frontGroup.name = 'front';
+    const FB = new Builder();
+    const front = buildFront(FB, m, { cStand, sandbag, cable, rollerStand });
+    FB.build(frontGroup);
+    const acam = buildACam(m);
+    const acamScreen = new THREE.Mesh(new THREE.PlaneGeometry(...acam.screenSize), feeds.material('shot', { gain: 1.6 }));
+    acamScreen.name = 'monitorA';
+    acamScreen.matrixAutoUpdate = false;
+    acamScreen.matrix.copy(acam.screen);
+    acam.group.add(acamScreen);
+    const acamCrew = new THREE.Mesh(crowd(crewFolk()), m.crew_people);
+    acamCrew.name = 'crewPeople';
+    acam.group.add(acamCrew);
+    frontGroup.add(acam.group);
+    frontGroup.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    root.add(frontGroup);
+    m.acamScreen = acamScreen.material;
+    // video village's people (crew.js says where)
+    const village = new THREE.Mesh(crowd(back.villageFolk), m.crew_people);
+    village.name = 'crewPeople';
+    village.matrixAutoUpdate = false;
+    root.add(village);
+    root.updateMatrixWorld(true);
+    for (const o of [acamScreen]) feeds.watch(o);
+    root.traverse((o) => { if (o.isMesh && (o.name === 'monitorA' || o.name === 'monitorB') && o !== acamScreen) feeds.watch(o); });
     // the parked sedan, front toward the corner, at the curb (real x 0.4-5.6)
     const carT = mat4([CAR_AT.x1, DECK, CAR_AT.z], [0, Math.PI, 0]);
     const carMeshes = buildCar(m, carT).build(root);
@@ -125,16 +197,34 @@ export default {
     // the crew area: over the chairs, the clamp light on craft services, over the stage door
     // the translight's glow on the floor and gear in front of it
     work.push({ position: root.localToWorld(new THREE.Vector3(...back.dropGlow)), color: new THREE.Color(0xffb878).multiplyScalar(0.008) });
-    for (const [x, y, z, p] of back.crewBulbs) work.push({ position: root.localToWorld(new THREE.Vector3(x, y, z)), color: new THREE.Color(0xffc890).multiplyScalar(p) });
+    for (const [x, y, z, p] of [...back.crewBulbs, ...front.workBulbs, ...inside.workBulbs]) work.push({ position: root.localToWorld(new THREE.Vector3(x, y, z)), color: new THREE.Color(0xffc890).multiplyScalar(p) });
+    for (const [x, y, z, p] of front.spill) work.push({ position: root.localToWorld(new THREE.Vector3(x, y, z)), color: new THREE.Color(0xc8d8ff).multiplyScalar(p) });
     addWorkLights([m.pine, m.luan, m.sandbag, m.stageFloor, m.stageWall, m.blackPaint, m.darkMetal, m.rubber, m.cableBlack,
       m.cableOrange, m.wood, m.flatEdge, m.deckEdge, m.diffusionBack, m.blackCloth, m.cameraBody, m.gripSilver, m.track, m.rainBars,
-      m.gridPipe, m.drape, m.cinder, m.softboxBody, m.spaceLight, m.signs, m.chairCanvas, m.canvasSeat, m.appleBox, m.cloth, m.fruit, m.doorSteel, m.hoseRed, m.pumpRed], work);
+      m.gridPipe, m.drape, m.cinder, m.softboxBody, m.spaceLight, m.signs, m.chairCanvas, m.canvasSeat, m.appleBox, m.cloth, m.fruit, m.doorSteel, m.hoseRed, m.pumpRed,
+      m.camBlack, m.camBody, m.camRubber, m.camMetal, m.camWhite, m.camRed, m.dollySilver, m.dollyDeck, m.dollySeat, m.dollyBlack, m.caseOrange, m.bounceBack, m.crew_people, m.bkBrick], work);
+    // the diner's practicals on its own surfaces (interior.js): pendants over
+    // the counter, domes over the booths, the pie case, the kitchen
+    const WORK_K = 0.0057; // power 1 = ~1.2 at 1.1 m (real) from the bulb
+    const toWork = (L, k = WORK_K) => L.map(({ pos, color, power, dir, cone }) => ({
+      position: root.localToWorld(new THREE.Vector3(...pos)),
+      color: new THREE.Color(color).multiplyScalar(power * k),
+      ...(dir ? { dir: new THREE.Vector3(...dir), cone } : {}),
+    }));
+    const inMats = Object.entries(m).filter(([k, v]) => v?.isMaterial && /^in_/.test(k) && !v.isMeshBasicMaterial && k !== 'in_glass').map(([, v]) => v);
+    addWorkLights([...inMats, m.wallIn, m.checker, m.blinds], toWork(interiorLights(), WORK_K * 1.3));
+    addWorkLights([m.k_tile, m.k_floor, m.k_steel, m.k_griddle], toWork(kitchenLights()));
+    // the diner's people: lit up close, backlit shapes from the shot
+    const backlit = backlitFigures(m.in_people);
     // the roof steel and the catwalks only see the bulbs up there
     const upper = [...back.catBulbs, ...back.trussBulbs].map(([x, y, z], i) => ({
       position: root.localToWorld(new THREE.Vector3(x, y, z)),
       color: new THREE.Color(0xffc890).multiplyScalar(i < back.catBulbs.length ? 0.012 : 0.022),
     }));
-    addWorkLights([m.roof, m.truss, m.catwalk, m.motor, m.chain], upper);
+    addWorkLights([m.roof, m.truss, m.motor, m.chain], upper);
+    // the catwalks' grating also sees their own caged lights (one list: the
+    // work-light hook may only be added once per material)
+    addWorkLights([m.catwalk], [...upper, ...back.railBulbs.map(([x, y, z]) => ({ position: root.localToWorld(new THREE.Vector3(x, y, z)), color: new THREE.Color(0xffc890).multiplyScalar(0.02) }))]);
 
     // ---------------- light masks: each surface only evaluates the spots that can reach it
     // bits: 1 moon, 2 diner window light, 4 street lamp, 8 softbox key
@@ -146,6 +236,8 @@ export default {
       5: ['brick', 'brick2'],
       // the interior is lit by its own practicals (self-illumination): no spots
       0: ['wallIn', 'checker', 'counter', 'counterTop', 'vinyl', 'tileIn', 'chromeIn', 'blinds', 'figure',
+        ...Object.keys(m).filter((k) => /^(in|k)_/.test(k) && m[k]?.isMaterial && !m[k].isMeshBasicMaterial),
+        'camBlack', 'camBody', 'camRubber', 'camMetal', 'camWhite', 'camRed', 'dollySilver', 'dollyDeck', 'dollySeat', 'dollyBlack', 'caseOrange', 'bounceBack', 'crew_people', 'bkBrick',
         // the stage beyond the set: work light only
         'gridPipe', 'drape', 'cinder', 'softboxBody', 'spaceLight', 'roof', 'truss', 'catwalk', 'motor', 'chain', 'bulbOff',
         'signs', 'chairCanvas', 'canvasSeat', 'appleBox', 'cloth', 'fruit', 'doorSteel', 'hoseRed', 'pumpRed'],
@@ -193,6 +285,16 @@ export default {
     addGlints(m.carBody, emitters, { gain: 1.0, rough: 0.018 });
     addGlints(m.carGlass, emitters, { gain: 1.0, rough: 0.01 });
     addGlints(m.carChrome, emitters, { gain: 0.8, rough: 0.12 });
+    // the diner's lights in its waxed floor, counter tops, chrome and steel
+    const inEmit = [
+      ...inside.pendants.map(([x, y, z]) => em(x, y, z, 0.12, 0xffd6a0, 14 * Math.PI * 0.12 * 0.12 * S2)),
+      ...inside.domes.map(([x, y, z]) => em(x, y - 0.06, z, 0.17, 0xffe0b0, 5 * Math.PI * 0.17 * 0.17 * S2)),
+    ];
+    addGlints(m.checker, inEmit, { gain: 0.5, rough: 0.2 });
+    addGlints(m.in_formica, inEmit, { gain: 0.5, rough: 0.16 });
+    addGlints(m.in_vinyl, inEmit, { gain: 0.35, rough: 0.3 });
+    addGlints(m.in_chrome, inEmit, { gain: 0.4, rough: 0.05 });
+    addGlints(m.in_steel, inEmit, { gain: 0.25, rough: 0.16 });
     // makeWet replaced the mask's shader hook: chain the mask again on top
     maskSpots(m.asphalt, 15);
     maskSpots(m.sidewalk, 15);
@@ -222,6 +324,8 @@ export default {
     // Only the light sources are mirrored (a dozen draws, no shading): the
     // reflection pass is the costliest thing per pixel of wet ground to keep
     // re-rendering, and what reads in puddles is the lights.
+    // (the diner's own lamps and the camera end's are not seen in the street)
+    for (const mesh of [...inside.meshes, ...frontGroup.children]) mesh.traverse((o) => { if (o.isMesh && (/^(in_|k_)/.test(o.name) || frontGroup.children.includes(o) || o.parent !== root)) o.userData.noReflect = true; });
     mirror.add(root, { emissiveOnly: true });
     for (const mesh of carMeshes) mirror.add(mesh, { silhouette: true });
 
@@ -271,7 +375,7 @@ export default {
       shadows: high,
       // the diner interior is barely hazed (it would glow milky through the glass)
       clearBox: {
-        min: [-1.6 * SCALE, FLOOR_Y, -3.6 * SCALE + FACADE_Z],
+        min: [DINER.x0 * SCALE, FLOOR_Y, (DINER.back - 1.3) * SCALE + FACADE_Z],
         max: [5.4 * SCALE, FLOOR_Y + 3.5 * SCALE, FACADE_Z],
         k: 0.12,
       },
@@ -332,17 +436,7 @@ export default {
     const pipe = new FilmPipeline(renderer, {
       quality,
       haze,
-      settings: {
-        exposure: 1.0,
-        bloom: 0.05,
-        bloomTint: new THREE.Color(1.0, 0.92, 0.88),
-        // night grade: blacks lean teal (barely lifted), highlights stay warm
-        lift: new THREE.Vector3(0.0, 0.0015, 0.004),
-        gamma: new THREE.Vector3(0.98, 1.0, 1.04),
-        gain: new THREE.Vector3(1.0, 0.97, 0.92),
-        saturation: 1.08,
-        contrast: 1.05,
-      },
+      settings: grade,
     });
 
     const buf = new THREE.Vector2();
@@ -355,34 +449,101 @@ export default {
 
     const features = { mirror: true };
     const mirrorSize = new THREE.Vector2();
-    const renderFrame = (r, camera, opts = {}) => {
-      const pt = pipe.ensure();
+    // At small rig scales the near plane comes 16x closer (life size): keep
+    // it at least 5 cm (real) out so the depth buffer stays fine enough for
+    // the decals seen from across the stage (_lib/depthcam.js).
+    const NEAR_MIN = 0.05 * SCALE;
+    const depthCam = makeDepthCamera();
+    // the monitors' feeds draw the scene themselves (hidden: what the shot
+    // cannot see: the camera end of the stage); the shot's feed shows the
+    // diner's people as the shot does, backlit
+    let litBefore = 0;
+    const around = (feed, before) => {
+      if (feed.id !== 'shot') return;
+      if (before) { litBefore = backlit.value; backlit.value = 1; } else backlit.value = litBefore;
+    };
+    Object.assign(feeds.o, { scene, mirror, rain, hide: [frontGroup], around });
+    let cull = null;
+    const renderFrame = (r, cam, opts = {}) => {
+      const camera = withNearAtLeast(cam, NEAR_MIN, depthCam);
       const P = r.__prof;
+      cull?.reset();
+      P?.begin('feeds');
+      const fed = !opts.check && feeds.update(camera, time.value);
+      P?.end(fed ? feeds.feeds[0].target : undefined);
+      cull?.apply(camera);
+      const pt = pipe.ensure();
       P?.begin('mirror');
       if (features.mirror) mirror.render(r, camera, mirrorSize.set(pt.w, pt.h));
       P?.end(features.mirror ? mirror.target : undefined);
       pipe.render(scene, camera, { bloom: !opts.check });
     };
     await warmUp(renderer, [scene, mirror.scene], (cam) => renderFrame(renderer, cam), size);
+    feeds.update(depthCam, 0, { force: true });
+    // the stage's merged meshes (all static) culled by their boxes: the
+    // camera end behind the shot's eye, the set's far side from the catwalk
+    root.updateMatrixWorld(true);
+    const still = root.children.filter((o) => o.isMesh && o !== rain.mesh);
+    frontGroup.traverse((o) => { if (o.isMesh) still.push(o); });
+    cull = new TightCull(still);
+    // the A-camera hides while the viewer's eye is inside it (gliding through)
+    const ROOM_EXPOSURE_DROP = 0.55;
+    const inv = new THREE.Matrix4();
+    const eyeReal = new THREE.Vector3();
+    const acamBox = new THREE.Box3(root.localToWorld(new THREE.Vector3(...front.acamBox.min)), root.localToWorld(new THREE.Vector3(...front.acamBox.max)));
     return {
       scene,
       pipeline: pipe,
-      debug: { rain, boom, mirror, haze, features, baked: baked?.stats ?? null, realToWorld: root.matrixWorld.clone() },
-      update(dt, t, eye) {
+      debug: { nearMin: NEAR_MIN, rain, boom, mirror, haze, features, feeds, frontGroup, get cull() { return cull; }, baked: baked?.stats ?? null, realToWorld: root.matrixWorld.clone() },
+      update(dt, t, eye, view) {
         time.value = t;
         renderer.getDrawingBufferSize(buf);
+        // a pixel's angle is the window's height over the eye's distance from
+        // the glass, both in window metres: the rig's scale cancels
         rain.update(t, eye.z, size.height, buf.y);
         boom.update(t);
+        // The camera end of the stage stands where the shot's viewer is: at
+        // the shot the viewer is the camera, and from its leaning eyes the
+        // gear would stand between the eye and the glass. It shows once the
+        // window leaves the shot (scale under 0.6; along a glide out of the
+        // shot nothing of it is in view at that point), never with the eye
+        // inside the A-camera. The diner's small props are always drawn (they
+        // are in view through the windows: switching them was a pop).
+        // The diner's end wall is a wild wall: as the eye comes up behind it
+        // (from the stage side, inside the room's length) it flies out into
+        // the grid, so the room can be seen from its open end.
+        if (view) {
+          inv.copy(root.matrixWorld).invert();
+          const e = eyeReal.copy(view.eyeWorld).applyMatrix4(inv);
+          const along = THREE.MathUtils.smoothstep(e.z, DINER.back + 0.1, DINER.back + 0.8) * (1 - THREE.MathUtils.smoothstep(e.z, -0.8, -0.1));
+          const lift = along * (1 - THREE.MathUtils.smoothstep(e.x, 7.6, 9.5)) * (1 - THREE.MathUtils.smoothstep(e.y, 3.6, 4.6));
+          inside.wild.position.y = 4.6 * lift;
+          inside.wild.updateMatrixWorld(true);
+          // and in the room (or at its open end) the camera exposes for the
+          // room, as a camera brought inside would: the bright interior the
+          // street sees comes down to mid-tones, the pools under the
+          // pendants keep their highlights (by the eye's place: smooth)
+          const inRoom = lift * THREE.MathUtils.smoothstep(e.x, DINER.x0 - 0.3, DINER.x0 + 0.3);
+          pipe.settings.exposure = 1 - ROOM_EXPOSURE_DROP * inRoom;
+        } else pipe.settings.exposure = 1;
+        // the people in the diner go to backlit shapes as the window comes
+        // back out to the shot (by the rig's scale: smooth along a glide)
+        backlit.value = view ? THREE.MathUtils.smoothstep(view.rig.scale, 0.3, 0.85) : 1;
+        const away = !!view && view.rig.scale < 0.6;
+        frontGroup.visible = away;
+        acam.group.visible = away && !acamBox.containsPoint(view.eyeWorld);
       },
       resize(s) { size = { ...s }; },
       prepare,
       render: renderFrame,
       dispose() {
+        feeds.dispose();
         pipe.dispose();
         haze.dispose();
         mirror.dispose();
         env.dispose();
         m.carEnvTarget?.dispose();
+        m.dinerEnv?.dispose();
         for (const p of baked?.pages ?? []) p.dispose();
         rain.dispose();
         scene.traverse((o) => {

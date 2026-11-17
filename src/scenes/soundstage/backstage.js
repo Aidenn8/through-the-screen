@@ -8,6 +8,7 @@ import { DECK, DINER, BRICK_WALL, RIG, BCAM, SOFTBOX, FLAG, FRONT_EDGE } from '.
 import { buildStageShell } from './stage.js';
 import { buildCrewArea } from './crew.js';
 import { buildStreetEnd } from './streetend.js';
+import { BOOM_TOP } from './boom.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -20,7 +21,7 @@ export function aimMatrix(pos, target, up = [0, 1, 0]) {
 const mul = (a, b) => new THREE.Matrix4().multiplyMatrices(a, b);
 
 // ---------------------------------------------------------------- pieces
-function sandbag(B, m, [x, y, z], rotY = 0) {
+export function sandbag(B, m, [x, y, z], rotY = 0) {
   const g = new THREE.CapsuleGeometry(0.11, 0.32, 4, 10);
   g.scale(1, 0.55, 1.0);
   B.add('sandbag', m.sandbag, g, mat4([x, y + 0.07, z], [Math.PI / 2, rotY, 0]));
@@ -47,13 +48,21 @@ function jack(B, m, base, out, h, y0) {
   }
 }
 
+// Mirror a geometry's u (a back read from the other side).
+function flipU(g, on) {
+  if (!on) return g;
+  const uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setX(i, -uv.getX(i));
+  return g;
+}
+
 // Back of a flat running along z (constant x), back facing +side (±1 in x).
-function flatBackX(B, m, x, z0, z1, y0, y1, side, { jacks = true, stencil = null } = {}) {
+export function flatBackX(B, m, x, z0, z1, y0, y1, side, { jacks = true, stencil = null } = {}) {
   const len = Math.abs(z1 - z0);
   const zc = (z0 + z1) / 2;
   const h = y1 - y0;
-  // luan skin
-  B.add('luan', m.luan, boxUV(0.006, h, len), mat4([x + side * 0.003, y0 + h / 2, zc]));
+  // luan skin (u runs the way the back is read: stencils not mirrored)
+  B.add('luan', m.luan, flipU(boxUV(0.006, h, len), side > 0), mat4([x + side * 0.003, y0 + h / 2, zc]));
   const fx = x + side * 0.04;
   // frame: rails top/bottom, stiles every ~1.2 m, toggles every ~0.6 m
   B.box('pine', m.pine, [0.07, 0.07, len], [fx, y0 + 0.035, zc]);
@@ -76,11 +85,11 @@ function flatBackX(B, m, x, z0, z1, y0, y1, side, { jacks = true, stencil = null
 
 // Back of a flat running along x (constant z); the back faces -z (side -1)
 // or +z (side +1, i.e. toward the viewer).
-function flatBackZ(B, m, z, x0, x1, y0, y1, { jacks = true, side = -1, face = null } = {}) {
+export function flatBackZ(B, m, z, x0, x1, y0, y1, { jacks = true, side = -1, face = null } = {}) {
   const len = x1 - x0;
   const xc = (x0 + x1) / 2;
   const h = y1 - y0;
-  B.add('luan', m.luan, boxUV(len, h, 0.006), mat4([xc, y0 + h / 2, z + side * 0.003]));
+  B.add('luan', m.luan, flipU(boxUV(len, h, 0.006), side < 0), mat4([xc, y0 + h / 2, z + side * 0.003]));
   if (face) B.add(face, m[face], boxUV(len, h, 0.006), mat4([xc, y0 + h / 2, z - side * 0.003]));
   const fz = z + side * 0.04;
   B.box('pine', m.pine, [len, 0.07, 0.07], [xc, y0 + 0.035, fz]);
@@ -95,7 +104,7 @@ function flatBackZ(B, m, z, x0, x1, y0, y1, { jacks = true, side = -1, face = nu
 }
 
 // C-stand: turtle base, riser, grip head, arm, flag. Floor at y.
-function cStand(B, m, [x, y, z], { height = 2.0, armTo = null, flag = [0.6, 0.9], flagRot = 0 } = {}) {
+export function cStand(B, m, [x, y, z], { height = 2.0, armTo = null, flag = [0.6, 0.9], flagRot = 0 } = {}) {
   const legs = [[0.42, 0.0, 0], [0.38, 0.12, 2.1], [0.36, 0.24, 4.2]];
   for (const [l, hh, a] of legs) {
     B.rod('gripSilver', m.gripSilver, [x, y + 0.42 + hh, z], [x + Math.cos(a) * l, y + 0.01, z + Math.sin(a) * l], 0.011, 5);
@@ -121,7 +130,7 @@ function cStand(B, m, [x, y, z], { height = 2.0, armTo = null, flag = [0.6, 0.9]
 }
 
 // Roller stand with a light head aimed at target. Returns head centre.
-function rollerStand(B, m, [x, y, z], height) {
+export function rollerStand(B, m, [x, y, z], height) {
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2 + 0.4;
     const fx = x + Math.cos(a) * 0.6;
@@ -203,7 +212,7 @@ function softbox(B, m, pos, target, w = 1.2, h = 1.2) {
 }
 
 // Cable lying on the floor through points (x, z), floor height y.
-function cable(B, m, pts, y, mat = 'cableBlack', r = 0.018) {
+export function cable(B, m, pts, y, mat = 'cableBlack', r = 0.018) {
   B.add(mat, m[mat], tube(pts.map(([x, z]) => [x, y + r, z]), r, pts.length * 12, 5), null, { cast: false, receive: true });
 }
 
@@ -213,10 +222,11 @@ export function buildBackstage(root, m) {
   const noShadow = { cast: false, receive: false };
 
   // Stage floor (beyond and under the set) and the stage walls.
-  const floor = new THREE.PlaneGeometry(30, 26);
+  // (to the front wall at z 32: the A-camera and the crew stand out there)
+  const floor = new THREE.PlaneGeometry(30, 50);
   const uv = floor.attributes.uv;
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 30, uv.getY(i) * 26);
-  B.add('stageFloor', m.stageFloor, floor, mat4([0, 0, -4], [-Math.PI / 2, 0, 0]), { cast: false, receive: true });
+  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 30, uv.getY(i) * 50);
+  B.add('stageFloor', m.stageFloor, floor, mat4([0, 0, 7.5], [-Math.PI / 2, 0, 0]), { cast: false, receive: true });
   // walls up to the roof, trusses, catwalks, chain motors (stage.js)
   const shell = buildStageShell(B, m);
   // video village, chairs, craft services, storage, the stage door (crew.js)
@@ -230,7 +240,7 @@ export function buildBackstage(root, m) {
 
   // ----- backs of flats
   // Diner interior right wall: its back faces +x (seen when leaning left).
-  flatBackX(B, m, DINER.x1 - 0.05, 0, DINER.back, DECK, DECK + 3.4, +1);
+  // (the diner's end wall and its braced back are a wild wall: interior.js)
   // the facade's upper flat above the interior wall: back seen from the right
   flatBackZ(B, m, -0.12, DINER.x1 - 1.2, DINER.x1, DECK + 3.4, DINER.height, { jacks: false });
   // Brick wall flat: back faces -x (seen past its near end when leaning right).
@@ -248,7 +258,7 @@ export function buildBackstage(root, m) {
     sandbag(B, m, [x, DECK, 0.42], 0.0);
   }
   // Spare "wild" flats leaning on a rack, backs to us, right side and left side.
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 0; i++) {
     const z = -4.2 - i * 0.18;
     const x0 = 6.2 + i * 0.1;
     B.add('luan', m.luan, boxUV(1.2, 3.6, 0.006), mul(mat4([x0 + 0.6, 1.75, z], [-0.08, 0, 0]), mat4([0, 0, 0])));
@@ -344,8 +354,17 @@ export function buildBackstage(root, m) {
   // ----- overhead: lighting grid, catwalk, hanging lights, rain bars
   const gy = 8.6;
   // galvanised pipe grid (48 mm), catching the work lights
+  // (over the set only: out front, where the camera and crew stand, the
+  // roof's trusses carry what hangs; seen from the catwalks the grid stays
+  // below the line of sight)
   for (let x = -12; x <= 12; x += 2) B.rod('gridPipe', m.gridPipe, [x, gy, -15], [x, gy, 6], 0.03, 8, noShadow);
   for (let z = -14; z <= 6; z += 2.5) B.rod('gridPipe', m.gridPipe, [-12, gy - 0.07, z], [12, gy - 0.07, z], 0.03, 8, noShadow);
+  // the boom mic's pole is rigged to the grid: a pipe stub off the grid pipe
+  // at z 1 with a clamp, the pole's top end clamped under it (boom.js)
+  B.rod('gridPipe', m.gridPipe, [BOOM_TOP[0], gy - 0.07, 1.0], [BOOM_TOP[0], gy - 0.07, BOOM_TOP[2] - 0.05], 0.025, 8, noShadow);
+  B.add('darkMetal', m.darkMetal, boxUV(0.09, 0.09, 0.1), mat4([BOOM_TOP[0], gy - 0.07, 1.0]), noShadow);
+  B.rod('darkMetal', m.darkMetal, [BOOM_TOP[0], gy - 0.07, BOOM_TOP[2]], [BOOM_TOP[0], BOOM_TOP[1] + 0.04, BOOM_TOP[2]], 0.03, 8, noShadow);
+  B.add('darkMetal', m.darkMetal, boxUV(0.08, 0.08, 0.08), mat4([BOOM_TOP[0], BOOM_TOP[1] + 0.04, BOOM_TOP[2]]), noShadow);
   // black serge borders hung across the stage under the grid, and side legs:
   // pleated so the work light rakes their folds (ss01, ss05)
   const drape = (w, h, pos, rotY = 0) => {
@@ -462,5 +481,5 @@ export function buildBackstage(root, m) {
   }
 
   B.build(root);
-  return { workBulbs, catBulbs: shell.catBulbs, trussBulbs: shell.trussBulbs, crewBulbs: crew.workBulbs, dropGlow: end.glow, moonPos, moonTarget, softboxPos: sbPos, softboxTarget: [0.4, 1.4, 1.3], kickPos: kick, kickTarget: [-2.6, 2.5, 1.8] };
+  return { workBulbs, catBulbs: shell.catBulbs, trussBulbs: shell.trussBulbs, railBulbs: shell.railBulbs, crewBulbs: crew.workBulbs, villageFolk: crew.villageFolk, dropGlow: end.glow, moonPos, moonTarget, softboxPos: sbPos, softboxTarget: [0.4, 1.4, 1.3], kickPos: kick, kickTarget: [-2.6, 2.5, 1.8] };
 }

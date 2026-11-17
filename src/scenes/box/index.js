@@ -25,6 +25,10 @@ import { warmUp } from '../_lib/warm.js';
 import { addWorkLights } from '../_lib/worklight.js';
 import { buildGarden, createGardenMaterials, DOOR } from './garden.js';
 import { buildNextRoom, createNextRoomMaterials, lightNextRoom, SIDE } from './nextroom.js';
+import { buildHouse, createHouseMaterials } from './house.js';
+import { buildWorld, createWorldMaterials } from './world.js';
+import { createOutdoor } from './outdoor.js';
+import { nav } from './nav.js';
 
 const DEPTH = 0.5;
 const FRAMES = [-0.12, -0.26, -0.4];
@@ -35,25 +39,6 @@ function metresTex(canvas, metres, opts) {
   const t = toTexture(canvas, opts);
   t.repeat.set(1 / metres, 1 / metres);
   return t;
-}
-
-// Dusk sky for the round window: deep blue overhead to a warm band low down,
-// with faint high cloud. Seen at a distance through the window.
-function skyTexture() {
-  return toTexture(paint(256, 512, (u, v) => {
-    // v 0 top .. 1 bottom; through the window we see v ~0.33-0.68, the
-    // hills' line near 0.6: deep blue overhead, rose then amber at the horizon
-    const stops = [[0.0, [8, 14, 40]], [0.32, [14, 24, 62]], [0.48, [40, 46, 92]], [0.58, [150, 92, 96]], [0.68, [214, 140, 88]], [1.0, [220, 150, 90]]];
-    let i0 = 0;
-    while (i0 < stops.length - 2 && v > stops[i0 + 1][0]) i0++;
-    const [va, ca] = stops[i0];
-    const [vb, cb] = stops[i0 + 1];
-    const k = Math.min(1, Math.max(0, (v - va) / (vb - va)));
-    const c = ca.map((a, i) => a + (cb[i] - a) * k * k * (3 - 2 * k));
-    const t = v;
-    const cl = Math.max(0, fbm(u, v, 3, 5, 17, 0.55, 6) - 0.55) * 1.6 * (1 - t) * t * 3;
-    return c.map((a, i) => Math.min(255, a + cl * [150, 110, 120][i]));
-  }), { repeat: [1, 1] });
 }
 
 // Andon paper: fibres, the inner frame's ribs as soft dark lines, brighter
@@ -71,13 +56,18 @@ function andonTexture() {
   return toTexture(c, { repeat: [1, 1] });
 }
 
-// Shoji paper with the low sun behind it: long fibres, a hot spot toward the
-// sun's side, a little cooler at the far edge.
+// Shoji paper with the low sun behind it: long kozo fibres and a few
+// clumps, thicker and thinner sheets, a hot spot toward the sun's side
+// falling off to the edges of each pane (512 px, so the fibres hold up
+// close by the window).
 function shojiTexture() {
-  const N = 128;
+  const N = 512;
   return toTexture(paint(N, N, (u, v) => {
-    const fib = fbm(u, v, 6, 3, 31, 0.5, 40);
-    const k = (0.86 + 0.14 * Math.exp(-(((u - 0.7) ** 2) + ((v - 0.45) ** 2)) * 5)) * (0.94 + 0.08 * fib);
+    const fib = fbm(u, v, 6, 4, 31, 0.55, 64); // long fibres along v
+    const cross = fbm(u, v, 48, 3, 33, 0.5, 6);
+    const clump = Math.max(0, fbm(u, v, 20, 3, 35, 0.5) - 0.62) * 2.2;
+    const hot = Math.exp(-(((u - 0.68) ** 2) * 2.2 + ((v - 0.45) ** 2) * 3.0));
+    const k = (0.8 + 0.2 * hot) * (0.9 + 0.1 * fib + 0.04 * cross) * (1 - 0.18 * clump);
     return [255 * k, 244 * k, 222 * k];
   }), { repeat: [1, 1] });
 }
@@ -121,7 +111,7 @@ function taperTube(points, r0, r1, seg = 24, radial = 7) {
   for (let i = 0; i < seg; i++) for (let j = 0; j < radial; j++) {
     const a = i * (radial + 1) + j;
     const b = a + radial + 1;
-    idx.push(a, b, a + 1, b, b + 1, a + 1);
+    idx.push(a, a + 1, b, b, a + 1, b + 1); // outward-facing (front faces outside)
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -227,6 +217,7 @@ export default {
   id: 'box',
   title: 'Box',
   order: 2,
+  nav,
   async create(ctx) {
     const { renderer, quality } = ctx;
     const high = quality !== 'low';
@@ -265,16 +256,13 @@ export default {
       lacquer: new THREE.MeshStandardMaterial({ color: 0x140805, roughness: 0.2, envMap: envRT.texture, envMapIntensity: 0.6 }),
       ceramic: new THREE.MeshStandardMaterial({ map: glazeTexture(), roughness: 0.3, envMap: envRT.texture, envMapIntensity: 0.5 }),
       ceramicIn: new THREE.MeshStandardMaterial({ color: 0x3c4c44, roughness: 0.22, envMap: envRT.texture, envMapIntensity: 0.6 }),
-      brass: new THREE.MeshStandardMaterial({ color: 0xd8aa60, metalness: 1, roughness: 0.25, envMap: envRT.texture, envMapIntensity: 1.6 }),
+      // double-sided: the bell is open at the lip, its inside shows from below
+      brass: new THREE.MeshStandardMaterial({ color: 0xd8aa60, metalness: 1, roughness: 0.25, envMap: envRT.texture, envMapIntensity: 1.6, side: THREE.DoubleSide }),
       string: new THREE.MeshLambertMaterial({ color: 0x9a2a20 }),
       paperStrip: new THREE.MeshLambertMaterial({ color: 0xe8dcc0, side: THREE.DoubleSide }),
       // the shoji paper is the light source as the room sees it: backlit by
       // the sun, the brightest thing in frame
       shojiPaper: new THREE.MeshBasicMaterial({ map: shojiTexture(), color: new THREE.Color(1.0, 0.88, 0.7).multiplyScalar(4.6) }),
-      sky: new THREE.MeshBasicMaterial({ map: skyTexture(), color: new THREE.Color(1, 1, 1).multiplyScalar(0.9) }),
-      hillFar: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.11, 0.1, 0.16) }),
-      hillNear: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.035, 0.032, 0.05) }),
-      star: new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.95, 0.85).multiplyScalar(30) }),
       pane: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.75, 0.5).multiplyScalar(0.05), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }),
       lanternPaper: new THREE.MeshBasicMaterial({ map: andonTexture(), color: new THREE.Color(1.0, 0.82, 0.6).multiplyScalar(1.15), side: THREE.DoubleSide }),
       branch: new THREE.MeshLambertMaterial({ color: 0x2a1a12 }),
@@ -282,7 +270,34 @@ export default {
       blossomBud: new THREE.MeshLambertMaterial({ color: 0xc8506a }),
       stamen: new THREE.MeshLambertMaterial({ color: 0xc89a3a }),
     };
-    Object.assign(mats, createGardenMaterials({ boards }), createNextRoomMaterials());
+    const outdoor = createOutdoor();
+    const extraTextures = [];
+    const take = (o) => { if (o._textures) { extraTextures.push(...o._textures); delete o._textures; } return o; };
+    // fine grain in the clay plaster (about a millimetre, mean-preserving):
+    // invisible from the room's own view, it keeps the walls from going to
+    // flat colour by the window
+    {
+      const w = mats.wall;
+      w.onBeforeCompile = (shader) => {
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vGrainW;')
+          .replace('#include <project_vertex>', '#include <project_vertex>\nvGrainW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', `#include <common>
+            varying vec3 vGrainW;
+            float gh3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+            float gn3(vec3 p) { vec3 i = floor(p); vec3 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+              return mix(mix(mix(gh3(i), gh3(i + vec3(1, 0, 0)), f.x), mix(gh3(i + vec3(0, 1, 0)), gh3(i + vec3(1, 1, 0)), f.x), f.y),
+                         mix(mix(gh3(i + vec3(0, 0, 1)), gh3(i + vec3(1, 0, 1)), f.x), mix(gh3(i + vec3(0, 1, 1)), gh3(i + vec3(1, 1, 1)), f.x), f.y), f.z); }`)
+          .replace('#include <map_fragment>', `#include <map_fragment>
+            {
+              float g = gn3(vGrainW * 900.0) * 0.55 + gn3(vGrainW * 2600.0) * 0.45;
+              diffuseColor.rgb *= 1.0 + 0.22 * (g - 0.5);
+            }`);
+      };
+      w.customProgramCacheKey = () => 'box-wall-grain';
+    }
+    Object.assign(mats, take(createGardenMaterials(outdoor, { boards })), createNextRoomMaterials(), take(createHouseMaterials(outdoor)), take(createWorldMaterials(outdoor)));
     let nextLit = false;
     // light bounced off the sunlit floor and the sunlit right wall onto the
     // ceiling (the ceiling never sees the sun itself)
@@ -303,11 +318,13 @@ export default {
     let strip = null;
     let stringMesh = null;
     let cookie = null;
+    let furin = null;
+    let hazeColour = null;
 
     function build() {
       // a rebuild (window resized) frees the old room first: its geometries,
       // and the sun's shadow maps
-      room.traverse((o) => { o.geometry?.dispose(); if (o.isLight) o.dispose?.(); });
+      room.traverse((o) => { if (o.isInstancedMesh) o.dispose(); o.geometry?.dispose(); if (o.isLight) o.dispose?.(); });
       room.clear();
       const B = new Builder();
       const t = 0.02; // wall thickness (outside the box)
@@ -344,32 +361,12 @@ export default {
         }
       }
       // round window: a dark timber ring and a bamboo cross, glazed; behind
-      // it, far away, a dusk sky, two ranges of hills and the evening star
+      // it the world itself: bamboo, the garden wall, the hills to the north
       B.add('frame', mats.frame, new THREE.TorusGeometry(R, 0.0045, 10, 96), mat4([0, cy, -D + 0.002]));
       B.add('frame', mats.frame, new THREE.TorusGeometry(R, 0.003, 8, 96), mat4([0, cy, -D - t]));
       B.box('frame', mats.frame, [0.0028, 2 * R, 0.003], [0, cy, -D - t / 2], [0, 0, 0], noShadow);
       B.box('frame', mats.frame, [2 * R, 0.0028, 0.003], [0, cy - R * 0.25, -D - t / 2], [0, 0, 0], noShadow);
       B.add('pane', mats.pane, new THREE.CircleGeometry(R, 64), mat4([0, cy, -D - t / 2 + 0.001]), noShadow);
-      const skyZ = -D - 2.5;
-      B.add('nightSky', mats.sky, new THREE.PlaneGeometry(1.8, 0.9), mat4([0, cy + 0.05, skyZ]), noShadow);
-      const hills = (z, base, amp, seed, key, mat, w) => {
-        const r = rng(seed);
-        const sh = new THREE.Shape();
-        sh.moveTo(-w / 2, base - 2);
-        const n = 40;
-        const ph = [r() * 6, r() * 6, r() * 6];
-        for (let i = 0; i <= n; i++) {
-          const x = -w / 2 + (w * i) / n;
-          const y = base + amp * (0.55 * Math.sin(x * 2.2 / w * 6 + ph[0]) + 0.3 * Math.sin(x * 5.1 / w * 6 + ph[1]) + 0.15 * Math.sin(x * 11 / w * 6 + ph[2]));
-          sh.lineTo(x, y);
-        }
-        sh.lineTo(w / 2, base - 2);
-        B.add(key, mat, new THREE.ShapeGeometry(sh), mat4([0, 0, z]), noShadow);
-      };
-      hills(-D - 1.6, cy - 0.035, 0.03, 3, 'hillFar', mats.hillFar, 1.6);
-      hills(-D - 0.7, cy - 0.042, 0.02, 8, 'hillNear', mats.hillNear, 1.0);
-      // the evening star, far enough to read as "at infinity"
-      B.add('star', mats.star, new THREE.SphereGeometry(0.009, 8, 6), mat4([0.12, 0.26, -D - 6]), noShadow);
       // right wall (solid) and left wall with the shoji window
       // the right wall, with a fusuma slid open near the glass onto the room
       // next door (nextroom.js)
@@ -477,12 +474,24 @@ export default {
           B.box('lacquer', mats.lacquer, [0.0025, 0.0025, aw + 0.003], [an[0] + (s * aw) / 2, an[1] + y, an[2]]);
         }
       }
-      // the engawa, the garden, the ridges and the evening sky outside the door
+      // the house from outside, the engawa, the garden, the world round it
+      // (house.js, garden.js, world.js) and the room next door
+      const house = buildHouse(B, mats, { W, H, D, DOOR, WIN, SIDE });
       const garden = buildGarden(B, mats, { W, H, D });
       const next = buildNextRoom(B, mats, { W, H, D });
-      if (!nextLit) { lightNextRoom(mats, next.lantern); nextLit = true; }
+      if (!nextLit) { lightNextRoom(mats, next.lantern, next.opening, next.coals); nextLit = true; }
+      outdoor.uniforms.gLampPos.value.copy(garden.lamp);
       B.build(room);
-      room.add(garden.sky);
+      const world = buildWorld(mats, { gy: -H / 2 - 0.035 });
+      for (const m of [...world.meshes, ...garden.instanced]) room.add(m);
+      furin = house.furin;
+      room.add(furin);
+      // everything outside casts into the garden sun's shadow map (layer 2);
+      // nothing outside casts into the room's spot shadow or the shaft's bake
+      room.traverse((o) => {
+        if (!o.isMesh) return;
+        if (/^(g|x|w)/.test(o.name) && !['gardenSky', 'wRidge', 'gWater', 'gStream', 'gCandle', 'gFireBox', 'xGlass'].includes(o.name) && !o.name.startsWith('furin')) o.layers.enable(2);
+      });
 
       // the wind-chime: string from the ceiling just inside the box to a
       // bell 5 cm in front of the glass, well inside the frame
@@ -495,7 +504,8 @@ export default {
       stringMesh.name = 'bell';
       room.add(stringMesh);
       bell = new THREE.Group();
-      const bellGeo = new THREE.LatheGeometry([[0.0, 0.012], [0.004, 0.0115], [0.0085, 0.008], [0.0105, 0.002], [0.011, 0.0]].map(([r, y]) => new THREE.Vector2(r, y)), 32);
+      // profile from the lip up to the crown, so the outer surface faces out
+      const bellGeo = new THREE.LatheGeometry([[0.011, 0.0], [0.0105, 0.002], [0.0085, 0.008], [0.004, 0.0115], [0.0, 0.012]].map(([r, y]) => new THREE.Vector2(r, y)), 32);
       const bellMesh = new THREE.Mesh(bellGeo, mats.brass);
       bellMesh.castShadow = true;
       bellMesh.name = 'bell';
@@ -536,14 +546,21 @@ export default {
       haze = new Haze({
         density: 1.4,
         ambient: new THREE.Color(0.0006, 0.0005, 0.0004),
-        lights: [HazeLight.fromSpot(sun, { anisotropy: 0.6, intensity: 3.4, shadowSize: high ? 768 : 384 })],
+        // a hair of penumbra: with none, the cone's smoothstep(a, a, x) is NaN at
+        // its edge, which the bloom spreads into black squares (seen on the
+        // shoji from the garden, where that edge meets the paper)
+        lights: [HazeLight.fromSpot(sun, { anisotropy: 0.6, intensity: 3.4, shadowSize: high ? 768 : 384, penumbra: 0.02 })],
         scale: high ? 6 : 8,
         steps: high ? 16 : 8,
         maxDist: 1.2,
         shadows: high,
-        // dust only inside the room
+        // dust only inside the room (over its footprint, and not above the
+        // ceiling: from outside the house the column would show in the sky)
         footprint: { rect: [-W / 2, -DEPTH, W / 2, 0.0], soft: 0.01 },
+        floorY: H / 2 + 0.002,
+        heightFalloff: 800,
       });
+      hazeColour = haze.marchMat.uniforms.lColor.value[0].clone();
       haze.bake(renderer, scene);
       if (pipe) pipe.haze = haze;
       // The room's shell blocks the haze bake (the shaft comes through the
@@ -552,6 +569,9 @@ export default {
       // at this grazing angle prints diagonal acne inside the sun patches.
       room.traverse((o) => { if (o.isMesh && ['wall', 'floor', 'ceiling'].includes(o.name)) o.castShadow = false; });
       renderer.shadowMap.needsUpdate = true;
+      // the garden's sun: one depth render over the terrace (nothing outside moves)
+      const gy = -H / 2 - 0.035;
+      outdoor.bakeShadow(renderer, scene, { min: [-1.42, gy - 0.02, -1.38], max: [0.9, 0.5, 0.02] }, high ? 2048 : 1024);
     }
 
     let pipe = null;
@@ -571,15 +591,74 @@ export default {
       },
     });
 
+    // Regional detail, from where the eye is, all of it continuous (nothing
+    // switches as the rig leaves rest or crosses a wall): deeper inside the
+    // room the dust is lighter looking into the sun (the forward lobe is ~25x
+    // the side-on one the room's own view sees) and the shoji paper is
+    // turned down from its backlit glare so its fibres read up close; the
+    // dust shaft is drawn only while the room is in the frustum.
+    const _ew0 = new THREE.Vector3(0, 0, 0.6);
+    const _fwd = new THREE.Vector3();
+    const _sunTravel = new THREE.Vector3(0.892, -0.29, -0.34).normalize();
+    const _frustum = new THREE.Frustum();
+    const _pv = new THREE.Matrix4();
+    const roomBox = new THREE.Box3();
+    const paperBase = mats.shojiPaper.color.clone();
+    const PAPER_DIM = 0.6;
+    let hazeKeep = 1;
+    let lastCam = null;
+    function regions(ew, rig) {
+      const S = THREE.MathUtils.smoothstep;
+      const inside = S(-ew.z, 0, 0.08) * S(W / 2 - Math.abs(ew.x), 0, 0.03) * S(H / 2 - Math.abs(ew.y), 0, 0.02) * S(ew.z + DEPTH, 0, 0.03);
+      let toward = 0;
+      if (rig) {
+        _fwd.set(0, 0, -1).applyQuaternion(rig.quaternion);
+        toward = S(-_fwd.dot(_sunTravel), 0.1, 0.8);
+      }
+      // the dust belongs to the room: it fades out as the eye leaves the room's
+      // neighbourhood (the front, where the room's own view is, stays in), and
+      // the pass is skipped once it has (seen from the garden its low-res blur
+      // also turns thin twigs against the far paper into 0/0)
+      const out = ew.z > 0 ? 0 : Math.max(0, -W / 2 - 0.02 - ew.x, ew.x - W / 2 - 0.02, -DEPTH - 0.02 - ew.z, ew.y - H / 2 - 0.02);
+      hazeKeep = 1 - S(out, 0.0, 0.05);
+      const k = (1 - 0.7 * inside * toward) * hazeKeep;
+      if (haze && hazeColour) haze.marchMat.uniforms.lColor.value[0].copy(hazeColour).multiplyScalar(k);
+      // the paper: about 200-215 luma once the eye is a few cm into the room
+      // (the room's own view, outside it, keeps its backlit 230)
+      const insideP = S(-ew.z, 0, 0.035) * S(W / 2 - Math.abs(ew.x), 0, 0.03) * S(H / 2 - Math.abs(ew.y), 0, 0.02);
+      mats.shojiPaper.color.copy(paperBase).multiplyScalar(1 - PAPER_DIM * insideP);
+      lastCam = { inside, k };
+    }
+    function hazeFor(camera) {
+      if (!pipe || !haze) return;
+      camera.updateMatrixWorld();
+      _pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      _frustum.setFromProjectionMatrix(_pv);
+      roomBox.min.set(-W / 2, -H / 2, -DEPTH);
+      roomBox.max.set(W / 2, H / 2, 0);
+      pipe.enabled.haze = hazeKeep > 0.002 && _frustum.intersectsBox(roomBox);
+    }
+
     await warmUp(renderer, [scene], (cam) => pipe.render(scene, cam), { width: W, height: H });
+    regions(_ew0, null);
     const up = new THREE.Vector3(0, 1, 0);
     const _pos = new THREE.Vector3(); // per-frame scratch (no allocations in update)
     const _dir = new THREE.Vector3();
     return {
       scene,
       pipeline: pipe,
-      debug: { get haze() { return haze; }, get sun() { return sun; } },
-      update(dt, time) {
+      debug: { get haze() { return haze; }, get sun() { return sun; }, get regions() { return lastCam; } },
+      update(dt, time, eye, view) {
+        // where the eye is in the world (the rig moves it); identity rig if
+        // the host passes no view
+        const ew = view?.eyeWorld ?? eye ?? _ew0;
+        regions(ew, view?.rig);
+        mats.gWater.uniforms.time.value = time;
+        if (furin) {
+          const { swing, stripPivot } = furin.userData;
+          swing.rotation.set(0.05 * Math.sin(time * 1.1) + 0.02 * Math.sin(time * 2.9), 0, 0.07 * Math.sin(time * 0.8 + 0.6));
+          stripPivot.rotation.set(0.35 * Math.sin(time * 1.9 + 0.4) + 0.12 * Math.sin(time * 4.3), 0.3 * Math.sin(time * 0.7), 0.15 * Math.sin(time * 2.6));
+        }
         // the bell swings a little, its paper strip flutters
         const { top, rest } = bell.userData;
         const sw = 0.004 * Math.sin(time * 1.3) + 0.0015 * Math.sin(time * 3.1);
@@ -602,14 +681,17 @@ export default {
         build();
       },
       render(r, camera, opts = {}) {
+        hazeFor(camera);
         pipe.render(scene, camera, { bloom: !opts.check });
       },
       dispose() {
         pipe.dispose();
         haze?.dispose();
         cookie?.dispose();
-        scene.traverse((o) => { o.geometry?.dispose(); if (o.isLight) o.dispose?.(); });
+        scene.traverse((o) => { if (o.isInstancedMesh) o.dispose(); o.geometry?.dispose(); if (o.isLight) o.dispose?.(); });
         for (const m of Object.values(mats)) { m.map?.dispose(); m.dispose(); }
+        for (const t of extraTextures) t.dispose();
+        outdoor.dispose();
         envRT.dispose();
         renderer.shadowMap.enabled = prevShadow.enabled;
         renderer.shadowMap.type = prevShadow.type;

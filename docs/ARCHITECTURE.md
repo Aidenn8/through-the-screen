@@ -90,8 +90,28 @@ nav: {
   bounds: { min: [x, y, z], max: [x, y, z] }, // where the rig position may go (scene coords)
   scale: [0.15, 1.5],                         // allowed rig scale
   tour: ['shot', 'inside', ...],              // optional order for the guided tour
+  room: { min: [x, y, z], max: [x, y, z] },   // optional: the eye's world position stays inside this box
 }
 ```
+
+A station may also carry two optional fields:
+
+```js
+{ id: 'garden', title: 'The garden', pose: { ... },
+  subject: [x, y, z],        // scene point that should stay in frame at typical head moves (tests use it)
+  view: {                    // limits on head tracking while at this station
+    maxStrength: 1.5,        // Look around strength here is min(the user's Strength, this)
+    verticalBoost: 1,        // replaces the global 1.5x up/down boost here
+    maxEyeZ: 0.9,            // metres: the rendered eye's distance from the glass is clamped to this,
+                             // so the viewpoint can't back into a wall behind the viewer
+  } }
+```
+
+Far scenes behave like a telephoto lens: an off-centre eye mostly pans the view,
+so outdoor stations want a low `maxStrength`. The app applies the limits of the
+station the rig is at or gliding to, blending them over the glide, and keeps
+the last station's limits while the viewer moves freely. Without `view` the
+global settings apply.
 
 `update(dt, time, eye, view)` gets a fourth argument
 `view = { eyeWorld: THREE.Vector3, rig: { position, quaternion, scale } }`.

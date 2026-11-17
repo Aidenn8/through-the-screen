@@ -14,7 +14,8 @@ export const DECK = 0.1; // street deck height above the stage floor
 export const CURB = 0.15; // sidewalk above the deck
 export const WALK = DECK + CURB;
 
-export const DINER = { x0: -1.6, x1: 5.4, back: -3.6, height: 4.4 };
+// back: the inside face of the back wall; the kitchen sits behind it (interior.js)
+export const DINER = { x0: -1.6, x1: 5.4, back: -4.2, height: 4.4 };
 export const SIDE_STREET = { x0: -5.2, x1: -1.6, back: -11.0 };
 export const BACKING_Z = -11.2; // painted sky backing behind everything
 export const BRICK_WALL = { x: -5.2, z0: -1.0, z1: -11.0, height: 6.6 };

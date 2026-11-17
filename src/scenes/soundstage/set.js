@@ -87,7 +87,8 @@ export function buildSet(root, m) {
       B.box('aluminum', m.aluminum, [b - a - 0.12, 0.08, 0.05], [(a + b) / 2, winY1 - 0.3, fz]);
       B.box('chrome', m.chrome, [b - a - 0.14, 0.3, 0.04], [(a + b) / 2, WALK + 0.17, fz + 0.01]);
       B.rod('chrome', m.chrome, [a + 0.12, 1.1, fz + 0.09], [b - 0.12, 1.1, fz + 0.09], 0.018, 8);
-      B.add('windowLit', m.windowLit, new THREE.PlaneGeometry(b - a - 0.14, 0.18), mat4([(a + b) / 2, winY1 - 0.16, fz - 0.03]), noShadow);
+      // the transom's glow behind the OPEN tubes (a card: from inside, the street shows through)
+      B.add('transomGlow', m.transomGlow, new THREE.PlaneGeometry(b - a - 0.14, 0.18), mat4([(a + b) / 2, winY1 - 0.16, fz - 0.03]), noShadow);
     }
     px = b;
   }
@@ -172,111 +173,26 @@ export function buildSet(root, m) {
   blinds(3.95, 5.25, 2.5, 1.75, fz - 0.12);
 
   // ---------------------------------------------------------- diner interior
+  // (interior.js: the room, its people and its kitchen)
   const ib = DINER.back;
-  const iw = W - 0.2;
-  B.add('checker', m.checker, planeUV(iw, -ib, 1), mat4([cx, DECK + 0.01, ib / 2], [-Math.PI / 2, 0, 0]), { cast: false, receive: true });
-  B.box('wallIn', m.wallIn, [iw, 3.4, FLAT], [cx, DECK + 1.7, ib - FLAT / 2]); // back wall
-  B.box('wallIn', m.wallIn, [FLAT, 3.4, -ib], [x1 - 0.1 - FLAT / 2, DECK + 1.7, ib / 2]); // right wall
-  B.box('wallIn', m.wallIn, [iw, FLAT, -ib], [cx, DECK + 3.4, ib / 2], [0, 0, 0], { cast: false }); // ceiling
-  // wainscot inside and a shelf of pies/cups along the back
-  B.box('tileIn', m.tileIn, [iw, 1.0, 0.03], [cx, DECK + 0.5, ib + 0.02]);
-  for (const y of [1.55, 1.95]) B.box('chromeIn', m.chromeIn, [iw * 0.7, 0.03, 0.25], [cx + 0.4, DECK + y, ib + 0.13]);
-  // pass-through to the kitchen (glowing)
-  B.add('passThrough', m.passThrough, new THREE.PlaneGeometry(1.6, 0.7), mat4([2.6, DECK + 1.5, ib + 0.012]), noShadow);
-  B.box('chromeIn', m.chromeIn, [1.7, 0.05, 0.3], [2.6, DECK + 1.15, ib + 0.15]);
-  // clock
-  B.cyl('counterTop', m.counterTop, 0.22, 0.22, 0.05, [0.2, DECK + 2.6, ib + 0.03], [Math.PI / 2, 0, 0], 24);
-  B.cyl('redEnamel', m.redEnamel, 0.25, 0.25, 0.04, [0.2, DECK + 2.6, ib + 0.015], [Math.PI / 2, 0, 0], 24);
-  // counter with stools
-  const cz = -1.85;
-  B.box('counter', m.counter, [5.6, 1.0, 0.55], [1.7, DECK + 0.5, cz]);
-  B.box('chromeIn', m.chromeIn, [5.66, 0.06, 0.62], [1.7, DECK + 1.03, cz]);
-  B.box('counterTop', m.counterTop, [5.7, 0.04, 0.66], [1.7, DECK + 1.07, cz]);
-  for (let i = 0; i < 8; i++) {
-    const sx = -0.8 + i * 0.75;
-    B.cyl('chromeIn', m.chromeIn, 0.025, 0.025, 0.62, [sx, DECK + 0.31, -1.25], [0, 0, 0], 8);
-    B.cyl('chromeIn', m.chromeIn, 0.16, 0.18, 0.03, [sx, DECK + 0.015, -1.25], [0, 0, 0], 16);
-    B.cyl('vinyl', m.vinyl, 0.2, 0.18, 0.1, [sx, DECK + 0.67, -1.25], [0, 0, 0], 18);
-  }
-  // booths along the windows (backs visible through the glass)
-  for (const bxx of [-0.85, 0.65, 2.05, 4.6]) {
-    B.box('vinyl', m.vinyl, [1.0, 0.9, 0.12], [bxx, DECK + 0.45, -0.75]);
-    B.box('vinyl', m.vinyl, [1.0, 0.12, 0.45], [bxx, DECK + 0.45, -0.5]);
-  }
-  // pendant lamps
-  const pendants = [];
-  for (let i = 0; i < 5; i++) {
-    const lx = -0.6 + i * 1.4;
-    B.rod('darkMetal', m.darkMetal, [lx, DECK + 3.4, -1.5], [lx, DECK + 2.32, -1.5], 0.006, 4, noShadow);
-    B.cyl('chromeIn', m.chromeIn, 0.03, 0.16, 0.1, [lx, DECK + 2.3, -1.5], [0, 0, 0], 16, noShadow);
-    B.add('pendant', m.pendant, new THREE.SphereGeometry(0.12, 18, 10), mat4([lx, DECK + 2.18, -1.5]), noShadow);
-    pendants.push([lx, DECK + 2.18, -1.5]);
-  }
 
-  // Dressing behind the counter: coffee urns, a pie case, menu boards over the
-  // pass-through, warm pools under the pendants.
-  for (const ux of [3.6, 4.0]) {
-    B.cyl('chromeIn', m.chromeIn, 0.14, 0.14, 0.55, [ux, DECK + 1.38, ib + 0.35], [0, 0, 0], 16);
-    B.cyl('chromeIn', m.chromeIn, 0.08, 0.14, 0.1, [ux, DECK + 1.7, ib + 0.35], [0, 0, 0], 16);
-  }
-  B.box('counter', m.counter, [5.6, 1.0, 0.5], [1.7, DECK + 0.5, ib + 0.3]); // back counter
-  B.box('counterTop', m.counterTop, [5.6, 0.04, 0.55], [1.7, DECK + 1.02, ib + 0.3]);
-  B.add('glass', m.glass, new THREE.CylinderGeometry(0.22, 0.22, 0.3, 16, 1, true), mat4([0.4, DECK + 1.24, cz]), noShadow);
-  B.cyl('counterTop', m.counterTop, 0.2, 0.2, 0.04, [0.4, DECK + 1.12, cz], [0, 0, 0], 16);
-  for (const [mx, mw] of [[1.4, 0.9], [2.6, 1.2], [3.8, 0.9]]) {
-    B.box('menuBoard', m.menuBoard, [mw, 0.5, 0.03], [mx, DECK + 2.25, ib + 0.03]);
-    for (let r = 0; r < 4; r++) B.add('menuText', m.menuText, new THREE.PlaneGeometry(mw * (0.55 + 0.3 * ((r * 7 + mx * 3) % 1)), 0.035), mat4([mx - 0.05, DECK + 2.42 - r * 0.1, ib + 0.05]), noShadow);
-  }
-  for (const pp of pendants) B.add('glowWarm', m.glowWarm, new THREE.PlaneGeometry(1.0, 0.7), mat4([pp[0], DECK + 1.1, cz], [-Math.PI / 2, 0, 0]), noShadow);
-
-  // People: two at the counter with their backs to the street, one in a
-  // booth, a cook in the pass-through. Read as silhouettes through the blinds.
-  // Figures are sculpted for their outline (all that shows through the
-  // blinds): a coat turned on a lathe with sloping shoulders, flattened
-  // front to back; the head carried forward of the shoulders (a slump);
-  // a fedora with a pinched crown and a curled brim; a cook's toque; a bob.
-  const lathe = (pts, seg = 20) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
-  const person = (x, z, { hat = false, lean = 0.1, turn = 0, seat = DECK + 0.77, cook = false, hair = false, slump = 0.06, arms = 'counter' } = {}) => {
-    const T = mat4([x, 0, z], [0, turn, 0]);
-    const P = (lx, ly, lz) => new THREE.Vector3(lx, ly, lz).applyMatrix4(T).toArray();
-    const add = (geo, lx, ly, lz, rot = [0, 0, 0], sc = [1, 1, 1]) => B.add('figure', m.figure, geo, new THREE.Matrix4().multiplyMatrices(T, mat4([lx, ly, lz], rot, sc)));
-    const H = 0.64; // seat to the top of the collar
-    add(lathe([[0, 0], [0.19, 0], [0.205, 0.06], [0.175, 0.24], [0.188, 0.4], [0.205, 0.49], [0.195, 0.54], [0.13, 0.6], [0.07, 0.63], [0, H]]), 0, seat, 0, [-lean, 0, 0], [1.25, 1, 0.72]);
-    const topY = seat + H * Math.cos(lean);
-    const topZ = -H * Math.sin(lean);
-    const hy = topY + 0.1;
-    const hz = topZ - slump;
-    add(new THREE.CylinderGeometry(0.045, 0.055, 0.12, 10), 0, topY + 0.03, (topZ + hz) / 2, [-0.5, 0, 0]);
-    add(new THREE.SphereGeometry(0.095, 18, 14), 0, hy, hz, [0, 0, 0], [0.88, 1.08, 1]);
-    if (hat) {
-      add(lathe([[0, 0], [0.088, 0], [0.084, 0.06], [0.07, 0.095], [0.035, 0.1], [0.0, 0.088]]), 0, hy + 0.045, hz, [0.08, 0, 0]);
-      add(lathe([[0.085, 0], [0.13, 0.004], [0.165, 0.014], [0.178, 0.03]], 28), 0, hy + 0.045, hz, [0.12, 0, 0]);
-    }
-    if (cook) add(lathe([[0, 0], [0.092, 0], [0.092, 0.11], [0.125, 0.16], [0.105, 0.205], [0, 0.215]]), 0, hy + 0.06, hz);
-    if (hair) add(new THREE.SphereGeometry(0.11, 18, 14), 0, hy - 0.01, hz + 0.02, [0, 0, 0], [1.05, 0.95, 1.12]);
-    for (const sx of [-1, 1]) {
-      const sh = [sx * 0.2, topY - 0.08, topZ * 0.8];
-      const el = arms === 'counter' ? [sx * 0.22, seat + 0.32, -0.26] : arms === 'table' ? [sx * 0.21, seat + 0.38, -0.3] : [sx * 0.23, topY - 0.36, 0.0];
-      const ha = arms === 'counter' ? [sx * 0.07, seat + 0.36, -0.44] : arms === 'table' ? [sx * 0.08, seat + 0.42, -0.48] : [sx * 0.18, topY - 0.62, -0.12];
-      B.rod('figure', m.figure, P(...sh), P(...el), 0.056, 10);
-      B.add('figure', m.figure, new THREE.SphereGeometry(0.052, 10, 8), mat4(P(...el)));
-      B.rod('figure', m.figure, P(...el), P(...ha), 0.044, 10);
-      B.add('figure', m.figure, new THREE.SphereGeometry(0.045, 10, 8), mat4(P(...ha)), { cast: true, receive: true });
-    }
-  };
-  person(-0.05, -1.3, { hat: true, lean: 0.28, slump: 0.08 });
-  person(1.45, -1.3, { lean: 0.16, turn: 0.4, hair: true, slump: 0.03 });
-  person(4.55, -0.55, { lean: 0.06, turn: Math.PI, seat: DECK + 0.6, hat: true, arms: 'table' });
-  person(2.55, ib + 0.25, { cook: true, seat: DECK + 0.95, turn: Math.PI, lean: 0.12, arms: 'down' });
-
-  // Diner side wall (faces the side street) with one window.
+  // Diner side wall (faces the side street) with one window: a real opening,
+  // glazed, blinds inside, the room behind it (interior.js)
   const sx = x0;
-  B.box('stucco', m.stucco, [FLAT, DINER.height - DECK, -ib], [sx - FLAT / 2 + 0.0, (DINER.height + DECK) / 2, ib / 2]);
+  const SW = { z0: -1.2, z1: -2.6, y0: 1.25, y1: 2.35 };
+  const sideWall = (z0, z1, y0, y1) => B.box('stucco', m.stucco, [FLAT, y1 - y0, z0 - z1], [sx - FLAT / 2, (y0 + y1) / 2, (z0 + z1) / 2]);
+  sideWall(0, SW.z0, DECK, DINER.height);
+  sideWall(SW.z1, ib, DECK, DINER.height);
+  sideWall(SW.z0, SW.z1, DECK, SW.y0);
+  sideWall(SW.z0, SW.z1, SW.y1, DINER.height);
   B.box('tile', m.tile, [0.08, 1.0 - WALK, -ib], [sx - 0.14, (1.0 + WALK) / 2, ib / 2]);
-  B.add('windowLit', m.windowLit, new THREE.PlaneGeometry(1.4, 1.1), mat4([sx - 0.105, 1.8, -1.9], [0, -Math.PI / 2, 0]), noShadow);
-  for (let y = 2.3; y > 1.4; y -= 0.055) B.add('blinds', m.blinds, boxUV(0.004, 0.045, 1.3), mat4([sx - 0.12, y, -1.9], [0, 0, 0.55]));
-  B.box('aluminum', m.aluminum, [0.12, 1.2, 0.06], [sx - 0.12, 1.8, -1.2]);
-  B.box('aluminum', m.aluminum, [0.12, 1.2, 0.06], [sx - 0.12, 1.8, -2.6]);
+  B.add('glass', m.glass, new THREE.PlaneGeometry(SW.z0 - SW.z1, SW.y1 - SW.y0), mat4([sx - FLAT + 0.02, (SW.y0 + SW.y1) / 2, (SW.z0 + SW.z1) / 2], [0, -Math.PI / 2, 0]), noShadow);
+  for (let y = SW.y1 - 0.06; y > 1.75; y -= 0.065) B.add('blinds', m.blinds, boxUV(0.004, 0.05, SW.z0 - SW.z1 - 0.06), mat4([sx + 0.06, y, (SW.z0 + SW.z1) / 2], [0, 0, -0.95]));
+  B.box('blinds', m.blinds, [0.03, 0.03, SW.z0 - SW.z1 - 0.04], [sx + 0.06, 1.75, (SW.z0 + SW.z1) / 2]);
+  B.box('aluminum', m.aluminum, [0.14, SW.y1 - SW.y0 + 0.1, 0.06], [sx - 0.06, (SW.y0 + SW.y1) / 2, SW.z0]);
+  B.box('aluminum', m.aluminum, [0.14, SW.y1 - SW.y0 + 0.1, 0.06], [sx - 0.06, (SW.y0 + SW.y1) / 2, SW.z1]);
+  B.box('aluminum', m.aluminum, [0.14, 0.05, SW.z0 - SW.z1], [sx - 0.06, SW.y1 + 0.02, (SW.z0 + SW.z1) / 2]);
+  B.box('aluminum', m.aluminum, [0.16, 0.05, SW.z0 - SW.z1], [sx - 0.08, SW.y0 - 0.02, (SW.z0 + SW.z1) / 2]);
 
   // ---------------------------------------------------------- side street
   // Next building along the right side of the side street (beyond the diner).
@@ -389,6 +305,7 @@ export function buildSet(root, m) {
 
   // ---------------------------------------------------------- lamppost (acorn)
   const lp = [DINER.x0 - 0.95, WALK, 1.75];
+  const lathe = (pts, seg = 20) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
   const lathePost = (pts) => lathe(pts, 32);
   // cast-iron post: stepped plinth and a bell base, a fluted shaft with a
   // collar, a turned capital under the globe
@@ -410,6 +327,8 @@ export function buildSet(root, m) {
   B.add('castIron', m.castIron, new THREE.TorusGeometry(0.083, 0.018, 8, 32), mat4([lp[0], lp[1] + 1.55, lp[2]], [Math.PI / 2, 0, 0]));
   B.add('castIronNS', m.castIron, lathe([[0, 3.2], [0.07, 3.2], [0.085, 3.23], [0.085, 3.27], [0.115, 3.33], [0.125, 3.37], [0.105, 3.41], [0.105, 3.45], [0.075, 3.47], [0, 3.47]]), mat4([lp[0], lp[1] - 0.0, lp[2]]), noShadow);
   B.add('lampGlobe', m.lampGlobe, new THREE.SphereGeometry(0.21, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.62), mat4([lp[0], lp[1] + 3.65, lp[2]], [Math.PI, 0, 0]), noShadow);
+  // the globe's open top under the cap, closed (seen into from the catwalks)
+  B.add('lampGlobe', m.lampGlobe, new THREE.CircleGeometry(0.21 * Math.sin(Math.PI * 0.62), 24), mat4([lp[0], lp[1] + 3.65 - 0.21 * Math.cos(Math.PI * 0.62), lp[2]], [-Math.PI / 2, 0, 0]), noShadow);
   B.cyl('castIronNS', m.castIron, 0.05, 0.2, 0.14, [lp[0], lp[1] + 3.87, lp[2]], [0, 0, 0], 16, noShadow);
   B.cyl('castIron', m.castIron, 0.012, 0.03, 0.18, [lp[0], lp[1] + 4.02, lp[2]], [0, 0, 0], 8);
 
@@ -440,7 +359,6 @@ export function buildSet(root, m) {
   return {
     meshes,
     lampPos: [lp[0], lp[1] + 3.6, lp[2]],
-    pendants,
     neonCentres: { diner: [1.0, winY1 + 0.45, 0.35], eats: [bx, 3.5, 0.0] },
     // centres of the five DINER letters (one wet-street streak each)
     neonLetters: [0, 1, 2, 3, 4].map((i) => [wordX + i * (0.52 * 0.75 + 0.52 * 0.3) + 0.18, winY1 + 0.46, fz + 0.1]),

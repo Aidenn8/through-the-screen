@@ -128,7 +128,7 @@ function marchFrag(n, shadowed = []) {
 }
 
 // Depth-aware 4x4 blur at low res: removes the dither pattern of the march.
-const blurFrag = /* glsl */ `
+export const blurFrag = /* glsl */ `
   uniform sampler2D src;
   uniform sampler2D tZ;
   uniform vec2 texel;
@@ -144,7 +144,10 @@ const blurFrag = /* glsl */ `
       acc += texture2D(src, uv) * w;
       ws += w;
     }
-    gl_FragColor = acc / ws;
+    // Behind thin geometry (twigs, wires) every tap can sit at a depth far
+    // from this pixel's and its weight underflow to 0: 0 / 0 is NaN, which
+    // the pipeline spreads into squares. Keep this pixel's own march then.
+    gl_FragColor = ws > 1e-4 ? acc / ws : texture2D(src, vUv);
   }
 `;
 

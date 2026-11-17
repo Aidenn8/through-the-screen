@@ -11,6 +11,7 @@ const ROWS = [
   ['dist', 'Distance, turn'],
   ['eyeUsed', 'Viewpoint'],
   ['view', 'View (V, R)'],
+  ['place', 'Place (N, T)'],
   ['motion', 'Motion'],
   ['track', 'Tracking'],
   ['infer', 'Face model'],
@@ -64,6 +65,7 @@ export class Hud {
     const forced = v && v.direction !== d.viewDirection;
     const turn = v?.turn?.on ? `, head turn ${fmt(v.turn.strength, 2)}x` : '';
     c.view.textContent = v ? `${v.direction === 'look' ? 'Look around' : 'True window'}, ${fmt(v.strength, 1)}x${turn}${forced ? ' (exact here)' : ''}` : '–';
+    c.place.textContent = d.place || '–';
     c.motion.textContent = d.motion || '–';
     const rec = d.recording;
     this.recordBtn.textContent = rec ? `Recording… ${rec.secondsLeft} s` : 'Record tracking log';

@@ -24,7 +24,10 @@ FaceTime camera 1280x720 @ 30 fps
      spring every frame, no extrapolation. (Predict ahead: One Euro, noise-
      adapted cutoffs, prediction braked at stops.) Hold / settle / glide when
      the face is lost or found
-  -> every rAF: display -> window coordinates, applyWindowCamera, scene.update, render
+  -> every rAF: display -> window coordinates; the rig (where the window is in
+     the scene) steps its spring; applyRigCamera (applyWindowCamera at the
+     rig's scale, then the rig's turn and place); scene.update(dt, t, eye,
+     view); render
 A watchdog restarts the model worker or the camera when either stalls.
 ```
 
@@ -46,6 +49,11 @@ A watchdog restarts the model worker or the camera when either stalls.
 | `src/tracking/tracker.js` | Camera, frame scheduling, restarts, stats, which eye to render from |
 | `src/app/resolution.js` | Adaptive resolution (frame rate and tracking rate) |
 | `src/app/calibration.js` | Steady check steps and their maths |
+| `src/core/rig.js` | The rig: window -> scene mapping, `applyRigCamera`, the short way round, `normalizeNav` (checks a scene's places) |
+| `src/core/rig-motion.js` | How the rig moves: goal and critically damped spring, held-key rates, eased glides, bounds, the tour |
+| `src/app/keys.js` | Every key the app answers, in one table (no two jobs per key, browser shortcuts left alone) |
+| `src/app/nav-input.js` | Arrow keys held, drag, two-finger swipe and wheel, pinch |
+| `src/app/ui-stations.js` | The strip of places above the dock, the caption on arrival |
 | `src/app/*` | Render loop, scenes (fade through black), interface, steady check, camera delay check, details panel |
 
 ## Decisions and why (measured, not guessed)
@@ -536,6 +544,191 @@ the switch takes ~2.6 s. Stalls are logged with their real length
 (`Slow frame: 783 ms (hidden behind a scene change)`) and kept out of frame
 statistics; the 250 ms clamp applies only to scene animation.
 
+## Moving the window (navigation)
+
+The contract is in `docs/ARCHITECTURE.md`: a scene's `nav` lists named
+stations (pose: position, yaw, pitch, scale), bounds, a scale range and a
+tour order; `update` gets `view = { eyeWorld, rig }`.
+
+**The camera.** `applyRigCamera` (src/core/rig.js) calls `applyWindowCamera`
+with the eye, the window and near/far all multiplied by the rig's scale, then
+turns the camera by R = Ry(yaw) Rx(pitch) and moves it to position + R (scale
+eye). `projection.js` is unchanged. With the default rig every number is the
+same as before, bit for bit (tested on the projection, its inverse, the world
+matrix and its inverse; the quaternion's z is written `0 - sy sp` so it is
+never -0). Any point p of the window maps to position + R (scale p) and lands
+on the same pixel at the same depth as before, from any eye (tested to 1e-9
+in NDC). `view.eyeWorld` is copied from the camera position after placing it,
+so they are the same numbers (tested, and checked in the browser every frame
+for 1.5 s of motion: difference exactly 0). The steady check always draws at
+the glass (the default rig): its cross must sit on the eye's reflection.
+
+**The motion** (src/core/rig-motion.js). Input sets a goal; the rig follows
+through a critically damped spring (8 rad/s, about half a second, stepped
+exactly per frame, so no overshoot and no dependence on frame rate). State is
+x, y, z, yaw, pitch and log scale; speeds are in window metres per second
+times the scale, so moving feels the same at every scale (tested). Choices:
+
+- Held arrows move the goal at 0.2 m/s (window metres), up and down 0.12,
+  Shift + left/right turns 45 deg/s; after 0.6 s held it speeds up to 2.5x
+  over 1.5 s. Forward and back are level (yaw only), like walking; the swipe
+  and pinch move along the view, tilt included, which is how to go down to
+  something below.
+- + and - step the scale by 1.25 per press and, held past 0.35 s, run at a
+  doubling per second. + shrinks the viewer (the set looks bigger).
+- A glide to a station runs the goal along a smoothstep path (zero speed at
+  both ends) from where the rig would come to rest by itself (position +
+  velocity / spring rate, never past the station) to the station; yaw takes
+  the short way round, scale goes evenly in log space. Its length comes from
+  the distance (in window metres at the mean scale), the turn, the tilt and
+  the scale change: 1.2 to 4.5 s, 1.3 times longer in the tour. Any input
+  during a glide takes over: the goal becomes where the rig would come to
+  rest, so nothing jumps or bounces back (tested: no frame step over 2 cm,
+  3 deg or 2.5 % of scale at 60 fps, and the change of step between frames
+  under 2 mm, also when redirected or taken over midway).
+- No overshoot (tested at 30, 60 and 120 fps): each of the six numbers moves
+  one way only from the start to the station. A key released settles
+  without passing where the goal stopped.
+- Bounds: the goal is clamped to nav.bounds, nav.scale and a pitch limit
+  (75 degrees, or the steepest station); the spring is clamped too and stops
+  at a wall. `normalizeNav` widens bounds or the scale range to take in any
+  station outside them (a warning), renames a repeated id, skips tour stops
+  that are not stations, and with no tour uses every station in order.
+- Arrival: the glide's time is up and the rig is within 2 mm (times scale),
+  0.3 degrees and 0.3 % of scale of the station. The strip marks it and the
+  caption names it.
+- Tour: starts with the stop after the station the rig is at (never by
+  holding still where it is), glides there, holds 4 s from arrival, goes on,
+  and loops. T, Esc, any move, a click on a place or N stops it (a glide under
+  way still lands). Head tracking runs throughout.
+
+**Input** (src/app/nav-input.js, keys in src/app/keys.js). The suggested
+controls had two conflicts. (1) A two-finger trackpad drag is a wheel event
+in the browser, the same event as a mouse wheel, so "two-finger drag turns"
+and "scroll dollies" cannot both hold: swipe and wheel up and down move
+forward and back, sideways turns, and pressing and dragging (mouse or
+trackpad) turns and tilts. (2) With the mouse standing in for the camera the
+pointer is the eye: while the button is down the eye holds still (App skips
+the pointer) and only the turn happens; on release the eye glides to the
+pointer through its own spring. Directions: the scene follows the pointer or
+the fingers (drag right turns left, drag up tilts down, like a photo sphere);
+fingers or wheel away from you go forward under macOS's natural scrolling.
+Gains: 0.1 degree per point for drag and swipe (a screen width is about 170
+degrees), 0.6 mm per point of swipe, 5 mm per unit of pinch. A pinch is
+always taken over the scene so it never zooms the page: Chrome's (Ctrl +
+wheel) and Safari's (gesturestart / gesturechange / gestureend, mapped to the
+same move: Chrome's deltaY is about -100 ln(scale) for the same fingers);
+wheel and gestures over the interface (the settings sheet scrolls) are left
+alone; html and body have `overscroll-behavior: none` so a sideways swipe
+never goes back a page. Arrow keys belong to text fields, selects and
+sliders, and to radio groups and menus (they move between options), not to
+buttons, so after clicking a place the arrows still move. While the
+settings sheet or the scene menu is open the arrows are theirs wherever the
+focus is (the sheet scrolls; an arrow already held stops moving the window).
+A new scene hides the last scene's place name and ends a tour without a
+message; the strip keeps a focused place focused. Directions for moving and
+turning come from the goal's heading, so a move just after a turn goes the
+new way at once. Cmd releases every held key
+(macOS sends no key up for keys let go while Cmd is down), as does leaving
+the page. Moving does not wake the faded interface: the arrows, + and -,
+the wheel, a pinch, and a drag on the scene (its press and its movement);
+plain pointer movement and other keys do. Only keyboard focus in the
+controls keeps them shown: a place or Tour clicked in the strip keeps the
+focus in Chrome, which held them on screen for a whole tour until
+`#updateIdle` asked for `:focus-visible`, and a strip button clicked with
+the pointer now gives the focus back (Chrome makes a kept focus visible on
+the next key, an arrow or Esc, which pinned them again). core-nav checks they
+fade 3.6 s after either click, also after a key, and that Tab keeps them. Places, N, H and T wait out a
+scene change (a T in the fade-out used to leave the tour's message over the
+next scene). A station too near a wall behind it is landed just off the wall
+(the glide's end goes through the same hold-off), and a glide arrives at the
+latest 2.5 s after its time is up, so a tour can never wait forever.
+
+Keys: arrows (Shift: rise, sink, turn), + and - (also = and _), N and
+Shift + N, H or Home, T; the old keys are unchanged, digits and brackets
+still ignore Shift as before (some layouts need it). The table is tested
+for no shared keys and no Cmd, Ctrl or Option combinations.
+
+**Measured** (headless Chromium on the M2 Air, `tools/core-nav.mjs`, mouse
+input, 2880 x 1864): the test room ran at 60 fps standing still and 56-60
+during a tour, the loop's JS 0.3-0.9 ms median and 1.1-1.5 ms p99 either
+way; Soundstage 54 fps still and 56 touring (2.1-2.4 ms median, 3.3 ms p99),
+so the rig costs nothing measurable; the spread is the headless compositor
+and a shared machine. Tracking is not involved (the rig runs after the eye
+is sampled). All eight Soundstage stations and the six test-room stations
+were reached by gliding, named by the caption and the strip, and looked at.
+
+**Station view limits** (station `view`, src/tracking/view-map.js). Far
+places act like a long lens: an eye moved off centre mostly pans, so at
+Look around 3x a ±6 cm rise became ±27 cm and swung the subject out. At a
+place: the strength used is min(Strength, maxStrength), verticalBoost
+replaces the 1.5x up and down, and the eye stops at maxEyeZ from the glass.
+Done after the motion filter, every frame: the mapping is linear about the
+rest point, so the limited eye is the mapped eye's offset from the rest point
+scaled per axis by (limited gain / the viewer's gain). That scales head
+turn's steering the same way, and it equals mapping at the limited strength
+exactly (tested to 1e-12). The rest point used is followed with a 0.3 s time
+constant, so Re-centre and switching eyes (which move the tracker's rest
+point at once) glide. The cap on distance eases in over its last 4 cm
+(unchanged below, slope 1 where it starts, never past it); with no cap the
+value is one knee past the cone's 1.4 m, so a scene without limits draws
+exactly as before. RigMotion keeps the limits in force as a weighted mix of
+stations' `view`: a glide blends from what was in force to the station's by
+its eased progress, taking over keeps the blend where it was, arriving makes
+it the station's alone, a new scene starts with its first place's. With the
+mouse, its 1.4x reach counts as the strength. True window is never held in:
+no strength or up-and-down limits there, at any Strength, so it stays exact
+for filming (bit for bit: an axis whose ratio is 1 is left untouched), but
+the distance cap still applies, so a viewer leaning far back never sees
+inside a wall. After the limits the eye is clamped to the view cone again at
+its final distance (a verticalBoost above 1.5 can take it past the cone,
+and the cap's nearer eye has a narrower cone; a point inside is unchanged).
+Phone lens mode (always the True window at 1x) is treated the same: exact,
+with only the distance cap and the room, so filming from far back never
+shows the inside of a wall. Not applied at all in the steady check, and the
+details panel then shows no limits. Measured: over a glide into limits
+with the eye held 10 cm off centre the drawn eye moves at most 6 mm a frame,
+its speed changing under 1 mm a frame (tests/station-view.test.js); the
+details panel shows the limits in force ("head 50 % / 33 % up, eye ≤ 70 cm").
+
+**The room** (`nav.room`, src/core/rig.js `keepEyeInRoom`). The eye's
+world position, position + R (scale eye), is kept inside the box every frame
+after the rig and head tracking: the nearest point inside, brought back to
+window coordinates, so a head pushing into a wall stops there and slides
+along it (never moving more than the head does, no feedback, so nothing
+oscillates); an eye inside is returned untouched, so every frame inside,
+True window included, is exactly as before. When the nearest point in the
+room is under 8 cm (times scale) in front of the glass (a window near a
+wall behind the viewer), the eye goes to the nearest point that is both in
+the room and that far in front: clamp(w + lambda n) for the smallest lambda
+that reaches the plane, by bisection (the exact projection onto box and
+half-space; equal to the plain clamp where that qualifies, so no seam).
+For that point to exist, RigMotion holds the rig off a wall behind it: the
+point 8 cm (times scale) in front of the window's centre stays in the room
+(a continuous push on the goal and the rig, no velocity dropped). Glides
+pass the same checks every frame. Measured on the Soundstage's nav with
+random poses in bounds and eyes anywhere in the view cone: the eye was
+outside the building in 1.1 % (scale 0.05-0.15), 13 % (0.15-0.4) and 46 %
+(0.4-1) of cases before, 0 after (tests/room.test.js does the same on a
+stand-in building, 18,000 poses, typical and extreme eyes).
+
+**Subject in frame** (src/core/subject-check.js, `checkSubjects(nav)`): for
+each station with `subject`, maps a grid of head positions about a 60 cm
+seat (±10 cm sideways, ±6 cm up and down, ±10 cm in depth; `grid: 'cube'`
+with all corners by default, or `'axes'`) at Look around 3x through the
+station's limits and the view cone, and checks the subject lands inside the
+window in front of the eye; returns `reach` (largest |glass x| / half width
+or |glass y| / half height) and the misses. A subject 48 m behind the glass
+(3 m away at 1:16) leaves the frame at 3x and stays in at maxStrength 1
+(tested). On 17 Nov, after the scenes' station reviews, every subject is in
+on the full cube: the Soundstage's eight (reach 0.59-0.97) and the Box's six
+(0.71-0.92). The scene tests call it (tests/scenes/nav.test.js,
+box-nav.test.js).
+
+**The test room** (src/app/placeholder-scene.js, `?scene=test-room`) has six
+places laid out for the 15-inch Air's window, to build and test against
+without the scenes.
+
 ## Measured results (final defaults)
 
 These clip results are for Predict ahead, the default when they were
@@ -582,8 +775,12 @@ turned 20-30 deg, rendered x 2.4 mm (5.5 with the correction on); still
 0.013 mm, dim light 0.027 mm per frame. Re-run on an idle machine for
 numbers comparable to the column above.
 
-Unit tests (`npm test`, node:test): 138 pass (4 skipped: the opt-in GPU
-checks, `SCENE_GPU_TESTS=1`), including Smooth follow (no overshoot on steps
+Unit tests (`npm test`, node:test): 175 pass (4 skipped: the opt-in GPU
+checks, `SCENE_GPU_TESTS=1`), including the rig and its motion (the default
+rig bit for bit, window to scene mapping, eyeWorld, bounds and scale,
+glides continuous and without overshoot, the short way round, scale in log
+space, stations in order, the tour's order and holds), the key table (no
+shared keys, browser shortcuts left alone) and navigation input, Smooth follow (no overshoot on steps
 and stops, sway attenuation, smoother than look-ahead 0, gaps), the view
 mapping (exact mirror, linear strength, clamps, gliding switches, rest point
 still during a lean), head turn (directions, dead-band, held tilt and posture, glances, R, True
@@ -627,7 +824,10 @@ URL parameters: `?scene=<id>` (`test-room` is the core's placeholder),
 (forget settings), `?e2e` (exposes `window.__wd` for the tools).
 
 Keys: F full screen (also on the intro), D tracking details, S settings,
-C steady check, [ and ] or 1-9 scenes, Escape closes panels.
+C steady check, [ and ] or 1-9 scenes, Escape closes panels (and stops the
+tour), arrows move (Shift: rise, sink, turn), + and - scale, N and
+Shift + N places, H or Home the first place, T the tour. The whole table is
+`src/app/keys.js`.
 
 Test tools (headless only; the test server has no file watching, so
 restart it after edits):
@@ -655,6 +855,7 @@ These start their own server (ports 5190-5192, 5195 for the sink):
 node tools/core-offline.mjs --video OUT/face.y4m   # 80 s tracked: nothing leaves the machine
 node tools/core-steady.mjs [--seconds 60]          # steady check memory per step, freed on close
 node tools/core-runtime.mjs                        # first scene, Box rebuild, scene errors, lost context
+node tools/core-nav.mjs [--scenes test-room,soundstage,box]   # every place screenshotted (out/core-nav), keys, drag, swipe, frame cost
 node tools/core-record.mjs [--video OUT/face.y4m]  # Record tracking log: download, contents, replay
 node tools/scene-shots.mjs --ports 5190,5191 --eyes "name:x,y,z;..."   # contact sheets from chosen eyes (cm)
 ```
@@ -740,3 +941,15 @@ that eye with the face still visible to the laptop camera; lock exposure.
   is unverified; Center Stage must be off.
 - Larger head turns than +-30 deg and partial occlusion (a phone near the
   face) are untested.
+- **Moving the window** is tested headless with Playwright's mouse, wheel
+  and keys, not on a real trackpad: the drag, swipe and pinch gains and the
+  swipe direction (natural scrolling assumed) need a real try. A trackpad
+  and a mouse wheel cannot be told apart, so a wheel's sideways tilt turns
+  too. There are no collisions inside the bounds, and the bounds are a box,
+  so a scene with an L-shaped space needs bounds that cover walls. The
+  window shows the scene's background past its built edges if a viewer
+  leans hard at a place near them (scenes check their stations from the
+  edges of the head-tracking range, tools/scene-nav.mjs). Head tracking's
+  view cone and Strength are not scaled down at small scales on purpose: at
+  scale 0.0625 a 45 cm lean is 2.8 cm of set, which reads as leaning, not
+  flying.

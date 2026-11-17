@@ -26,6 +26,8 @@ export const ICONS = {
   exitFullscreen: svg('<path d="M7.5 3.5v4h-4M16.5 7.5h-4v-4M12.5 16.5v-4h4M3.5 12.5h4v4"/>'),
   steady: svg('<circle cx="10" cy="10" r="6.5"/><circle cx="10" cy="10" r="2.5"/><path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3"/>'),
   close: svg('<path d="M5 5l10 10M15 5L5 15"/>'),
+  play: svg('<path d="M7 5.5v9l7-4.5z"/>'),
+  stop: svg('<rect x="6" y="6" width="8" height="8" rx="1.5"/>'),
   lock: svg('<rect x="4.5" y="9" width="11" height="8" rx="2"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/>'),
 };
 

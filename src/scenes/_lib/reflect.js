@@ -124,6 +124,35 @@ export class PlanarMirror {
     renderer.autoClear = prevAuto;
   }
 
+  /**
+   * Render the mirror for another camera into `target` (a second, smaller
+   * view: a monitor's feed) and point the wet materials at it until restore().
+   * size: pixel size of the target that view's main pass draws into.
+   */
+  renderTo(renderer, camera, target, size) {
+    const u = this.uniforms;
+    this.saved = { tex: u.tReflect.value, res: u.reflectRes.value.clone(), lod: u.reflectMaxLod.value };
+    const prev = renderer.getRenderTarget();
+    const prevAuto = renderer.autoClear;
+    renderer.autoClear = true;
+    renderer.setRenderTarget(target);
+    renderer.render(this.scene, camera);
+    renderer.setRenderTarget(prev);
+    renderer.autoClear = prevAuto;
+    u.tReflect.value = target.texture;
+    u.reflectRes.value.copy(size);
+    u.reflectMaxLod.value = Math.max(0, Math.floor(Math.log2(Math.min(target.width, target.height))) - 2);
+  }
+
+  restore() {
+    if (!this.saved) return;
+    const u = this.uniforms;
+    u.tReflect.value = this.saved.tex;
+    u.reflectRes.value.copy(this.saved.res);
+    u.reflectMaxLod.value = this.saved.lod;
+    this.saved = null;
+  }
+
   dispose() {
     this.target?.dispose();
     for (const m of this.owned) m.dispose();

@@ -26,6 +26,20 @@ export function buildStreetEnd(B, m, { sandbag }) {
   for (const z of [z0 + 1.2, zc - 2.5, zc + 2.5, z1 - 1.2]) sandbag(B, m, [DX + 0.18, 0, z], Math.PI / 2);
   // black masking legs at its two ends, a little in front of it
   for (const z of [z0 - 0.7, z1 + 0.7]) B.add('drape', m.drape, new THREE.PlaneGeometry(1.2, h + 0.6), mat4([DX + 0.25, (h + 0.6) / 2, z], [0, Math.PI / 2, 0]), noShadow);
+  // behind it, the lamps that light it: a bank of sky pans on a pipe frame,
+  // aimed at the drop's back (the hot spots in front are theirs)
+  const LX = DX - 1.35;
+  for (let i = 0; i < 6; i++) {
+    const z = z0 + (i + 0.5) * (w / 6);
+    B.rod('gridPipe', m.gridPipe, [LX - 0.25, 0, z], [LX - 0.25, y0 + h, z], 0.024, 6, noShadow);
+    B.box('blackPaint', m.blackPaint, [0.5, 0.06, 0.5], [LX - 0.25, 0.03, z], [0, 0, 0], noShadow);
+    for (let j = 0; j < 3; j++) {
+      const y = y0 + (j + 0.5) * (h / 3);
+      B.box('blackPaint', m.blackPaint, [0.34, 0.66, 0.66], [LX, y, z], [0, 0, 0], noShadow);
+      B.add('skyPan', m.skyPan, new THREE.PlaneGeometry(0.6, 0.6), mat4([LX + 0.175, y, z], [0, Math.PI / 2, 0]), noShadow);
+      B.rod('gridPipe', m.gridPipe, [LX - 0.25, y, z], [LX - 0.17, y, z], 0.02, 6, noShadow);
+    }
+  }
   // the translight's glow on the floor in front of it
   B.add('glowWarmFloor', m.glowWarmFloor, new THREE.PlaneGeometry(2.4, w), mat4([DX + 1.0, 0.012, zc], [-Math.PI / 2, 0, Math.PI / 2]), noShadow);
 

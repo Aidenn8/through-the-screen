@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { boxUV, mat4 } from '../_lib/geo.js';
+import { SKIN, seatedAt, seatedFeet } from './people.js';
 
 const mul = (a, b) => new THREE.Matrix4().multiplyMatrices(a, b);
 
@@ -65,11 +66,12 @@ export function buildCrewArea(B, m, { cStand, sandbag, cable }) {
   for (const [i, x] of [[0, -0.32], [1, 0.32]]) {
     const S = mul(VV, mat4([x, 1.66, -0.16], [-0.12, -x * 0.25, 0]));
     B.add('cameraBody', m.cameraBody, boxUV(0.62, 0.4, 0.05), S);
-    B.add('monitorFeed', m.monitorFeed, atlasPlane(0.57, 0.355, { u0: i * 0.5, u1: i * 0.5 + 0.5 }), mul(S, mat4([0, 0, 0.027])), noShadow);
+    // live: the A camera's picture and the B camera's (feeds.js)
+    B.add(i ? 'monitorB' : 'monitorA', i ? m.monitorB : m.monitorA, new THREE.PlaneGeometry(0.57, 0.355), mul(S, mat4([0, 0, 0.027])), noShadow);
   }
   // a small on-camera monitor and the wireless receiver with its antennas
   B.add('cameraBody', m.cameraBody, boxUV(0.2, 0.13, 0.04), mul(VV, mat4([0.42, 1.08, 0.12], [-0.3, 0, 0])));
-  B.add('monitorFeed', m.monitorFeed, atlasPlane(0.18, 0.11, { u0: 0, u1: 0.5 }), mul(VV, mat4([0.42, 1.08, 0.142], [-0.3, 0, 0])), noShadow);
+  B.add('monitorA', m.monitorA, new THREE.PlaneGeometry(0.18, 0.11), mul(VV, mat4([0.42, 1.08, 0.142], [-0.3, 0, 0])), noShadow);
   B.add('blackPaint', m.blackPaint, boxUV(0.22, 0.08, 0.16), mul(VV, mat4([-0.38, 1.04, 0.05])));
   for (const x of [-0.46, -0.3]) B.rod('blackPaint', m.blackPaint, P(x, 1.08, 0.0), P(x - 0.03, 1.3, -0.02), 0.006, 4);
   // the tent: a black solid behind the screens and a floppy over them
@@ -85,9 +87,8 @@ export function buildCrewArea(B, m, { cStand, sandbag, cable }) {
   // the monitors' light on the cart and the floor in front
   B.add('glowCool', m.glowCool, new THREE.PlaneGeometry(1.6, 1.4), mul(VV, mat4([0, 0.01, 0.75], [-Math.PI / 2, 0, 0])), noShadow);
   // director, DP, script supervisor
-  for (const [i, x] of [[0, -0.7], [1, 0.0], [2, 0.7]]) chair(B, m, mul(VV, mat4([x, 0, 1.25 + Math.abs(x) * -0.15], [0, Math.PI - x * 0.35, 0])), i);
-  // headset and a script on the director's seat
-  B.box('newsPaper', m.newsPaper, [0.21, 0.02, 0.28], P(-0.7, 0.78, 1.15), [0, -0.4, 0]);
+  // (facing the monitors: the names on their backs face whoever stands behind)
+  for (const [i, x] of [[0, -0.7], [1, 0.0], [2, 0.7]]) chair(B, m, mul(VV, mat4([x, 0, 1.25 + Math.abs(x) * -0.15], [0, x * 0.35, 0])), i);
 
   // ---------------- apple boxes: full, full, half, quarter, pancake; one loose
   let y = 0;
@@ -141,7 +142,8 @@ export function buildCrewArea(B, m, { cStand, sandbag, cable }) {
   for (let k = 0; k < 5; k++) B.box('luan', m.luan, [1.0, 0.2 * (k + 1), 0.28], [12.2, 0.3 + 0.1 * (k + 1), -8.75 + k * 0.28]);
 
   // ---------------- the stage door: steel door, exit sign, rolling light
-  const DZ = -6.3;
+  // (at the end of the gap behind the diner: the backstage view's far end)
+  const DZ = -4.65;
   const DX = 13.7; // proud of the wall's ribs
   B.box('darkMetal', m.darkMetal, [0.08, 2.5, 1.3], [DX, 1.25, DZ]);
   B.box('doorSteel', m.doorSteel, [0.05, 2.3, 1.1], [DX - 0.04, 1.15, DZ]);
@@ -164,17 +166,17 @@ export function buildCrewArea(B, m, { cStand, sandbag, cable }) {
 
   // ---------------- the wall beside the door: the stage's power panels under
   // a bulkhead light, conduit up to the catwalk, a caged ladder to it
-  for (const [z, h] of [[-3.55, 1.9], [-4.3, 1.9], [-5.0, 1.4]]) {
+  for (const [z, h] of [[-6.15, 1.9], [-6.9, 1.9], [-7.6, 1.4]]) {
     B.box('doorSteel', m.doorSteel, [0.3, h, 0.66], [DX - 0.12, 0.3 + h / 2, z]);
     B.box('darkMetal', m.darkMetal, [0.02, 0.05, 0.5], [DX - 0.28, 0.3 + h * 0.55, z]); // handle bar
     B.rod('gripSilver', m.gripSilver, [DX - 0.1, 0.3 + h, z], [DX - 0.1, 10.3, z], 0.03, 6, noShadow);
   }
-  B.box('signs', m.signs, [0.01, 0.12, 0.5], [DX - 0.275, 1.95, -4.3], [0, 0, 0], noShadow);
-  for (const [z0, z1] of [[-3.6, -2.1], [-4.4, -1.9]]) cable(B, m, [[DX - 0.3, z0], [DX - 0.9, (z0 + z1) / 2], [11.4, z1], [10.2, -3.6], [8.6, -4.0]], 0, 'cableBlack', 0.016);
-  const bulkhead = [DX - 0.15, 3.3, -4.4];
+  B.box('signs', m.signs, [0.01, 0.12, 0.5], [DX - 0.275, 1.95, -6.9], [0, 0, 0], noShadow);
+  for (const [z0, z1] of [[-6.2, -3.0], [-6.95, -2.6]]) cable(B, m, [[DX - 0.3, z0], [DX - 0.9, (z0 + z1) / 2], [11.4, z1], [10.2, -3.6], [8.6, -4.0]], 0, 'cableBlack', 0.016);
+  const bulkhead = [DX - 0.15, 3.3, -6.9];
   B.add('castIron', m.castIron, new THREE.CylinderGeometry(0.14, 0.14, 0.12, 12, 1, false), mat4(bulkhead, [0, 0, Math.PI / 2]));
   B.add('bulb', m.bulb, new THREE.CircleGeometry(0.1, 16), mat4([bulkhead[0] - 0.065, bulkhead[1], bulkhead[2]], [0, -Math.PI / 2, 0]), noShadow);
-  B.add('glowWarm', m.glowWarm, new THREE.PlaneGeometry(3.2, 3.6), mat4([DX - 0.17, 2.4, -4.4], [0, -Math.PI / 2, 0]), noShadow);
+  B.add('glowWarm', m.glowWarm, new THREE.PlaneGeometry(3.2, 3.6), mat4([DX - 0.17, 2.4, -6.9], [0, -Math.PI / 2, 0]), noShadow);
   const LZ = -2.55;
   for (const dz of [-0.24, 0.24]) B.rod('doorSteel', m.doorSteel, [DX - 0.18, 0, LZ + dz], [DX - 0.18, 10.4, LZ + dz], 0.025, 5);
   for (let yy = 0.3; yy < 10.4; yy += 0.3) B.rod('doorSteel', m.doorSteel, [DX - 0.18, yy, LZ - 0.24], [DX - 0.18, yy, LZ + 0.24], 0.012, 4, noShadow);
@@ -188,6 +190,28 @@ export function buildCrewArea(B, m, { cStand, sandbag, cable }) {
 
   // work bulbs: over the chairs, the clamp light on the table, over the door
   return {
+    // where video village's people sit and stand (index.js builds them)
+    villageFolk: villageFolk(VV),
     workBulbs: [[8.6, 3.4, 0.3, 0.006], [lampAt[0], lampAt[1], lampAt[2], 0.01], [bulkhead[0] - 0.3, bulkhead[1], bulkhead[2], 0.01]],
   };
+}
+
+// The director and the script supervisor in their chairs, the DP standing by
+// the cart, all watching the monitors (VV: the village's frame).
+function villageFolk(VV) {
+  const turnVV = -0.58;
+  const W = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(VV).toArray();
+  const sitAt = (x) => W(x, seatedAt(0.76), 1.25 + Math.abs(x) * -0.15);
+  return [
+    { at: sitAt(-0.7), turn: turnVV + Math.PI - 0.7 * 0.35, lean: 0.18, headTilt: -0.05, skin: SKIN[0], hair: 'grey', hairStyle: 'short', headset: true,
+      top: 0x3a3632, bottom: 0x22242a, shoes: 0x1a1612, coat: { color: 0x4a4038 },
+      hands: [[-0.14, 0.2, 0.33], [0.16, 0.24, 0.36]], elbows: [[-1, -0.6, -0.2], [1, -0.6, -0.2]], feet: seatedFeet(0.76, { footRest: 0.3, forward: 0.3 }) },
+    { at: sitAt(0.7), turn: turnVV + Math.PI + 0.7 * 0.35, lean: 0.25, headTilt: 0.2, skin: SKIN[5], hair: 'brown', hairStyle: 'long', female: true, build: 0.94,
+      top: 0x6a4a5a, bottom: 0x24262c, shoes: 0x141414,
+      hands: [[-0.12, 0.13, 0.3], [0.1, 0.15, 0.32]], elbows: [[-1, -0.5, 0], [1, -0.5, 0]], feet: seatedFeet(0.76, { footRest: 0.3, forward: 0.28, spread: 0.08 }),
+      props: [{ geo: new THREE.BoxGeometry(0.26, 0.04, 0.32), at: [0, 0.08, 0.3], rot: [0.5, 0, 0], color: 0x1a2a4a }] },
+    { at: W(1.2, 0.95, 0.5), turn: turnVV + Math.PI + 0.3, lean: 0.04, headTilt: 0.05, skin: SKIN[1], hair: 'black', hat: 'cap', hatColor: 0x2a2a2a,
+      top: 0x2a2e30, bottom: 0x3a3428, shoes: 0x2a2018,
+      hands: [[0.05, 0.25, 0.2], [-0.04, 0.27, 0.22]], elbows: [[-1, -0.2, 0.4], [1, -0.2, 0.4]] },
+  ];
 }

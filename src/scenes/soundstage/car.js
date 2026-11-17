@@ -67,6 +67,21 @@ function crown(g, hw, c, y0, y1, tuck = 0) {
   return g;
 }
 
+// A full wheel cover, turned: a rolled outer lip, a dished ring, a raised
+// bead, and a domed centre. Its curves pick up the street's lights and the
+// dark sky in bands, which is what reads as chrome (a flat disc of mirror
+// shows one even grey). Axis +y, the face up; the rim sits on y = 0.
+function hubcap() {
+  const prof = [
+    [0.212, 0.0], [0.214, 0.012], [0.206, 0.024], [0.19, 0.03], [0.17, 0.026], [0.15, 0.024],
+    [0.135, 0.03], [0.128, 0.04], [0.118, 0.044], [0.105, 0.04], [0.085, 0.046], [0.06, 0.062],
+    [0.035, 0.074], [0.012, 0.079], [0.0, 0.08],
+  ].map(([r, y]) => new THREE.Vector2(r, y));
+  const g = new THREE.LatheGeometry(prof, 40);
+  g.computeVertexNormals();
+  return g;
+}
+
 /**
  * Build the car into a Builder under one transform.
  * @param {Builder} B
@@ -161,7 +176,7 @@ export function buildCar(m, T) {
       const z = s * (CAR.width / 2 - 0.13);
       add('carTyre', m.carTyre, new THREE.CylinderGeometry(R, R, 0.22, 28), mat4([x, R, z], [Math.PI / 2, 0, 0]));
       add('carTyre', m.carTyre, new THREE.TorusGeometry(R - 0.05, 0.06, 8, 28), mat4([x, R, z + s * 0.1]));
-      add('carChrome', m.carChrome, new THREE.CylinderGeometry(0.17, 0.2, 0.04, 24), mat4([x, R, z + s * 0.12], [Math.PI / 2, 0, 0]));
+      add('carChrome', m.carChrome, hubcap(), mat4([x, R, z + s * 0.1], [s * Math.PI / 2, 0, 0]));
       add('carWhitewall', m.carWhitewall, new THREE.RingGeometry(0.21, 0.28, 28), mat4([x, R, z + s * 0.113], [0, s > 0 ? 0 : Math.PI, 0]));
     }
   }

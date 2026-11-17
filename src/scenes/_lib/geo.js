@@ -61,7 +61,8 @@ export class Builder {
     const A = new THREE.Vector3(...a);
     const B = new THREE.Vector3(...b);
     const len = A.distanceTo(B);
-    const g = new THREE.CylinderGeometry(r, r, len, seg, 1, true);
+    // capped: seen end on (a rail running at the eye) an open tube shows its inside
+    const g = new THREE.CylinderGeometry(r, r, len, seg, 1, false);
     const mid = A.clone().add(B).multiplyScalar(0.5);
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
     const m = new THREE.Matrix4().compose(mid, q, new THREE.Vector3(1, 1, 1));
@@ -90,7 +91,9 @@ export class Builder {
 // Box whose UVs are in metres (world-scaled), so tiling textures keep their
 // physical size on every face. uvScale: metres per texture repeat.
 export function boxUV(w, h, d, uvScale = 1) {
-  const g = new THREE.BoxGeometry(w, h, d);
+  // a size worked out as a difference can come out negative: that would turn
+  // the box inside out (its faces wound backwards, seen from the back)
+  const g = new THREE.BoxGeometry(Math.abs(w), Math.abs(h), Math.abs(d));
   const pos = g.attributes.position;
   const nrm = g.attributes.normal;
   const uv = g.attributes.uv;

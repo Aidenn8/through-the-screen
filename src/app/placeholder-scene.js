@@ -5,6 +5,23 @@
 export default {
   id: 'test-room',
   title: 'Test room',
+  // Places to carry the window to (docs/ARCHITECTURE.md), for building and
+  // testing navigation. Laid out for the 15-inch Air's window (33 x 21 cm);
+  // the room is the window's size and 45 cm deep. At the smaller scales the
+  // eye (s x 60 cm in front of the window) stays inside the room.
+  nav: {
+    stations: [
+      { id: 'glass', title: 'At the glass', pose: { position: [0, 0, 0] } },
+      { id: 'red', title: 'By the red target', pose: { position: [-0.08, 0.02, -0.2], yaw: 0, pitch: 0, scale: 0.2 } },
+      { id: 'right-wall', title: 'Toward the right wall', pose: { position: [-0.06, 0, -0.1], yaw: -60, pitch: 0, scale: 0.15 } },
+      { id: 'floor', title: 'Looking down at the floor', pose: { position: [0, 0, -0.2], yaw: 20, pitch: -55, scale: 0.15 } },
+      { id: 'up', title: 'Looking up at the ceiling', pose: { position: [0, -0.02, -0.1], yaw: 0, pitch: 50, scale: 0.15 } },
+      { id: 'back', title: 'Turned round at the back', pose: { position: [0.05, 0, -0.3], yaw: 150, pitch: -10, scale: 0.2 } },
+    ],
+    bounds: { min: [-0.14, -0.09, -0.4], max: [0.14, 0.09, 0.1] },
+    scale: [0.12, 1.5],
+    tour: ['red', 'right-wall', 'floor', 'up', 'back', 'glass'],
+  },
   async create(ctx) {
     const { THREE } = ctx;
     let { width: W, height: H } = ctx.size;

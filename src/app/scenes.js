@@ -96,8 +96,13 @@ export class SceneHost {
     c.inst.resize?.({ ...size });
   }
 
-  update(dt, time, eye) {
-    this.current?.inst.update?.(dt, time, eye);
+  /**
+   * @param {object} eye window coordinates (read only)
+   * @param {{eyeWorld, rig:{position, quaternion, scale}}} view the eye in the
+   *   scene and the window's place there (docs/ARCHITECTURE.md; read only)
+   */
+  update(dt, time, eye, view) {
+    this.current?.inst.update?.(dt, time, eye, view);
   }
 
   render(camera) {

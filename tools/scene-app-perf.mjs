@@ -9,6 +9,8 @@
 //
 //   --dpr R   pin the pixel ratio (the app's ?dpr=), so the scene is judged
 //             at that resolution instead of the one adaptive resolution picks
+//   --stations all | a,b,c   measure at each of the scene's places (the app
+//             glides there, settles, then measures for --seconds); one scene
 //
 // Headless; the camera is the clip (Chromium's fake capture device), never
 // the real one.
@@ -25,6 +27,7 @@ const VIDEO = opt('video');
 const SECONDS = Number(opt('seconds', 20));
 const SCENES = opt('scenes', 'soundstage,box').split(',');
 const DPR = opt('dpr', null);
+const STATIONS = opt('stations', null);
 
 let server = null;
 for (const port of [5194, 5195, 5193]) {
@@ -53,6 +56,13 @@ try {
     await page.waitForFunction(() => window.__wd?.app?.tracker?.state === 'running', null, { timeout: 60000 });
     await page.waitForFunction((s) => window.__wd.app.host.current?.id === s, id, { timeout: 60000 });
     await page.waitForTimeout(5000); // shaders compile, caches warm, governor's first windows
+    const places = STATIONS ? (STATIONS === 'all' ? await page.evaluate(() => window.__wd.app.motion.nav?.stations.map((s) => s.id) ?? []) : STATIONS.split(',')) : [null];
+    for (const place of places) {
+    if (place) {
+      await page.evaluate((id) => window.__wd.app.goToStation(id), place);
+      await page.waitForFunction((id) => window.__wd.app.motion.at === id, place, { timeout: 30000 });
+      await page.waitForTimeout(2000);
+    }
     await page.evaluate(() => { const a = window.__wd.app; a.perf.deltas = []; a.perf.work = []; });
     const t0 = await page.evaluate(() => ({ results: window.__wd.app.tracker.stats.results ?? null }));
     await page.waitForTimeout(SECONDS * 1000);
@@ -63,11 +73,12 @@ try {
     });
     const p = r.perf;
     const steps = log.filter((l) => /Rendering at/.test(l)).map((l) => l.replace(/^\[\w+\] /, ''));
-    console.log(`${String(r.scene).padEnd(11)} buffer ${r.buffer.join('x')} (dpr ${r.dpr.toFixed(3)}): ${p.fps.toFixed(1)} fps, interval p50 ${p.p50.toFixed(1)} p95 ${p.p95.toFixed(1)} p99 ${p.p99.toFixed(1)} max ${p.max.toFixed(1)} ms, ${p.over20ms}/${p.frames} over 20 ms (${((100 * p.over20ms) / Math.max(1, p.frames)).toFixed(2)} %); loop JS p99 ${p.workP99.toFixed(2)} ms; tracking ${r.hz?.toFixed(1)} Hz${r.latency ? `, capture->result ${r.latency.toFixed?.(1) ?? r.latency} ms` : ''}`);
+    console.log(`${String(r.scene).padEnd(11)}${place ? ` @ ${place.padEnd(10)}` : ''} buffer ${r.buffer.join('x')} (dpr ${r.dpr.toFixed(3)}): ${p.fps.toFixed(1)} fps, interval p50 ${p.p50.toFixed(1)} p95 ${p.p95.toFixed(1)} p99 ${p.p99.toFixed(1)} max ${p.max.toFixed(1)} ms, ${p.over20ms}/${p.frames} over 20 ms (${((100 * p.over20ms) / Math.max(1, p.frames)).toFixed(2)} %); loop JS p99 ${p.workP99.toFixed(2)} ms; tracking ${r.hz?.toFixed(1)} Hz${r.latency ? `, capture->result ${r.latency.toFixed?.(1) ?? r.latency} ms` : ''}`);
     for (const s of steps) console.log(`  ${s}`);
     const errors = log.filter((l) => /pageerror|\[error\]/.test(l) && !/XNNPACK/.test(l));
     if (errors.length) console.log(errors.slice(0, 5).join('\n'));
     void t0;
+    }
     await page.close();
   }
 } finally {

@@ -48,6 +48,12 @@ export function neonWord(text, { size = 0.4, tube = 0.012, spacing = 0.28, verti
       if (clean.length < 2) continue;
       const curve = new THREE.CatmullRomCurve3(clean, false, 'catmullrom', 0.1);
       geoms.push(new THREE.TubeGeometry(curve, Math.max(8, clean.length * 4), tube, seg, false));
+      // the tube's sealed ends (an open end shows the tube's inside up close)
+      for (const p of [clean[0], clean[clean.length - 1]]) {
+        const cap = new THREE.SphereGeometry(tube, seg, Math.max(4, seg >> 1));
+        cap.translate(p.x, p.y, p.z);
+        geoms.push(cap);
+      }
     }
     cursor += vertical ? size * (1 + spacing) : w + size * spacing;
   }
