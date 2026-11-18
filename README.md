@@ -7,6 +7,10 @@ look around things; duck to see what is above. To move around inside a scene,
 carry the window with the arrow keys, a drag or a two-finger swipe, or let the
 tour (T) take you through it.
 
+![The rainy diner shot in the Soundstage as the view swings left and right, the tour gliding to the sidewalk, inside the diner, behind the camera, video village and the catwalk, then the Box's room and its garden](docs/media/demo.gif)
+
+*Recorded in mouse mode, where the pointer stands in for your head; sped up and trimmed.*
+
 ## Running it
 
 You need a Mac with a webcam, Chrome, and Node.js 20.19 or newer (22.12 or
